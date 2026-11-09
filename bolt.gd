@@ -15,6 +15,7 @@ var life := 0.6
 var speed := 16.0
 var pierce := false
 var hit_radius := 0.65
+var charge := 0.12      # заряд супера за попадание
 var _hit := []          # кого уже задели (для пробивающих)
 var _trail_t := 0.0
 
@@ -76,6 +77,13 @@ func _ready() -> void:
 				var a := i * PI / 2.0
 				_piece(_box(Vector3(0.05, 0.05, 0.7)), Vector3(cos(a) * 0.22, sin(a) * 0.22, -0.1),
 					_glow_mat(c.lightened(0.3), 0.55, 2.0), Vector3(0, 0, a))
+		"slam":
+			# ударная волна молота: широкая голубая дуга
+			var c := Color(0.45, 0.75, 1.0)
+			var m := _glow_mat(c, 0.85, 2.8)
+			for i in 5:
+				var a := (i - 2) * 0.4
+				_piece(_box(Vector3(0.42, 0.08, 0.14)), Vector3(sin(a) * 0.6, 0, cos(a) * 0.6 - 0.6), m, Vector3(0, a + PI / 2.0, 0))
 		_:
 			var m := _glow_mat(base.lightened(0.5))
 			# серп из трёх отрезков дугой
@@ -96,6 +104,8 @@ func _physics_process(delta: float) -> void:
 		queue_free()
 		return
 	global_position = to
+	if kind == "slam":
+		scale = scale.lerp(Vector3(1.5, 1, 1.5), delta * 6.0)
 	if kind == "wind":
 		rotate_object_local(Vector3.FORWARD, delta * 14.0)
 		_trail_t -= delta
@@ -109,7 +119,7 @@ func _physics_process(delta: float) -> void:
 			if Vector2(kp.x - to.x, kp.z - to.z).length() < hit_radius:
 				k.take_damage(damage, shooter)
 				if is_instance_valid(shooter):
-					shooter.add_charge(0.12 if not pierce else 0.0)
+					shooter.add_charge(charge)
 				if not pierce:
 					queue_free()
 					return

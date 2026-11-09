@@ -491,7 +491,7 @@ func _page_heroes(col: Control) -> void:
 
 	# выбор героя
 	var row := _card(vb, 150, NAVY, INK, 5)
-	var list := [["knight", "Рыцарь", true], ["archer", "Лучница", true], ["", "Молотобоец", false], ["", "Маг", false]]
+	var list := [["knight", "Рыцарь", true], ["archer", "Лучница", true], ["hammer", "Молотобоец", true], ["", "Маг", false]]
 	for i in list.size():
 		var id: String = list[i][0]
 		var open: bool = list[i][2]
@@ -503,8 +503,10 @@ func _page_heroes(col: Control) -> void:
 			kind = "helm"
 		elif id == "archer":
 			kind = "bow"
+		elif id == "hammer":
+			kind = "hammer"
 		_icon(hp, kind, Rect2(47, 6, 60, 60), Profile.skin_colors()[0] if id == "knight" else Color.WHITE)
-		_lbl(hp, list[i][1], 20, Color.WHITE if open else Color(0.6, 0.6, 0.75), Rect2(0, 66, 154, 28))
+		_lbl(hp, list[i][1], 19 if str(list[i][1]).length() > 8 else 20, Color.WHITE if open else Color(0.6, 0.6, 0.75), Rect2(0, 66, 154, 28))
 		if not open:
 			_lbl(hp, "скоро", 18, GOLD, Rect2(0, 92, 154, 24))
 		elif sel:
@@ -535,7 +537,7 @@ func _page_heroes(col: Control) -> void:
 	head.custom_minimum_size = Vector2(700, 70)
 	vb.add_child(head)
 	if hid != "knight":
-		_lbl(head, "Облики лучницы — скоро", 30, Color(0.75, 0.75, 0.95), Rect2(0, 10, 700, 56))
+		_lbl(head, "Облики для этого героя — скоро", 30, Color(0.75, 0.75, 0.95), Rect2(0, 10, 700, 56))
 		return
 	_lbl(head, "Облики доспехов", 34, Color(1, 0.95, 0.8), Rect2(0, 10, 700, 56))
 	for pair in [[0, 1], [2, 3]]:

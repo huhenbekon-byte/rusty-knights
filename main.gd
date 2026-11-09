@@ -56,7 +56,7 @@ var _tex := {}
 var _bush_mat: StandardMaterial3D
 var _bush_mat_seen: StandardMaterial3D
 const SFX_NAMES := ["swing", "hit", "wall", "death", "pickup", "score", "ready",
-	"super", "win", "lose", "click", "respawn"]
+	"super", "win", "lose", "click", "respawn", "slam"]
 var _sfx := {}
 var _sfx_pool: Array = []
 var _sfx_next := 0
@@ -482,7 +482,8 @@ func _spawn_knights() -> void:
 			k.is_player = (t == 0 and i == 0)
 			# составы: у игрока выбранный герой, у остальных — рыцари и лучницы вперемешку
 			var ph := str(Profile.data.get("hero", "knight"))
-			var comp := [[ph, "knight", "archer"], ["knight", "archer", "knight"]]
+			var ally := "hammer" if ph != "hammer" else "knight"
+			var comp := [[ph, ally, "archer"], ["hammer", "archer", "knight"]]
 			k.hero = comp[t][i]
 			k.spawn_pos = spots[i]
 			k.position = spots[i]
@@ -846,6 +847,19 @@ func nearest_battery(pos: Vector3):
 			best_d = d
 			best = b
 	return best
+
+
+## «Удар по земле» Молотобойца: урон всем врагам в радиусе, волна, камни, тряска.
+func ground_slam(attacker, pos: Vector3, radius: float, dmg: float) -> void:
+	for k in knights:
+		if k.alive and k.team != attacker.team and k.global_position.distance_to(pos) < radius:
+			k.take_damage(dmg, attacker)
+	sfx("slam", pos)
+	fx_ring(pos, Color(0.45, 0.75, 1.0), radius, 0.4)
+	fx_ring(pos, Color(0.8, 0.7, 0.55), radius * 0.6, 0.55)
+	fx_burst(pos + Vector3(0, 0.2, 0), Color(0.5, 0.48, 0.62), 18, 6.0, 0.16, 0.9, -14.0)
+	fx_burst(pos + Vector3(0, 0.1, 0), Color(0.82, 0.74, 0.6, 0.8), 14, 3.0, 0.2, 0.7, 0.5)
+	shake(0.7, pos)
 
 
 func on_knight_died(k, killer = null) -> void:

@@ -12,7 +12,7 @@ var _last_attacker = null
 var main  # главная сцена (main.gd)
 var spawn_pos := Vector3.ZERO
 
-var hero := "knight"       # knight | archer
+var hero := "knight"       # knight | archer | hammer
 var max_hp := 100.0
 var hp := 100.0
 var speed := 5.0
@@ -37,6 +37,8 @@ var _strafe_t := 0.0
 var _stuck_t := 0.0
 var _unstuck_t := 0.0
 var _unstuck_dir := Vector3.ZERO
+var _leap_t := 0.0          # прыжок Молотобойца
+var _leap_dir := Vector3.ZERO
 
 var _visual: Node3D
 var _body: Node3D
@@ -52,6 +54,11 @@ func _apply_hero_stats() -> void:
 		speed = 5.4
 		attack_range = 11.0
 		keep_dist = 7.0
+	elif hero == "hammer":
+		max_hp = 140.0
+		speed = 4.5
+		attack_range = 4.0
+		keep_dist = 1.4
 	hp = max_hp
 
 
@@ -140,6 +147,10 @@ func _kite(parent: Node3D, scale_k: float, depth: float, z: float, color: Color)
 func _build_visual() -> void:
 	if hero == "archer":
 		_build_archer()
+		_finish_visual()
+		return
+	if hero == "hammer":
+		_build_hammer()
 		_finish_visual()
 		return
 	_visual = Node3D.new()
@@ -315,6 +326,91 @@ func _build_archer() -> void:
 	string.material_override = main.toon(Color(0.95, 0.93, 0.85), false, false)
 
 
+## Молотобоец: коренастый, тёмные латы, меховой воротник, шарф и плащ цвета команды,
+## шлем со светящимися глазами, огромный квадратный молот в правой руке.
+func _build_hammer() -> void:
+	_visual = Node3D.new()
+	add_child(_visual)
+	var tc: Color = main.team_colors[team]
+	var cloth := tc.darkened(0.3)
+	var steel := Color(0.4, 0.42, 0.5)
+	var dark := Color(0.25, 0.26, 0.32)
+	var leather := Color(0.4, 0.25, 0.15)
+	var pants := Color(0.24, 0.17, 0.14)
+	var fur := Color(0.88, 0.8, 0.64)
+	var gold := Color(1.0, 0.72, 0.28)
+	var eye := Color(0.45, 0.8, 1.0)
+
+	# ноги: широкая стойка, поножи, большие сапоги
+	for sx in [-0.17, 0.17]:
+		var leg := Node3D.new()
+		leg.position = Vector3(sx, 0.46, 0)
+		_visual.add_child(leg)
+		_part(leg, _capsule(0.12, 0.44), Vector3(0, -0.17, 0), pants)
+		_part(leg, _sphere(0.1), Vector3(0, -0.1, 0.08), steel, Vector3.ZERO, Vector3(1, 1, 0.7))
+		_part(leg, _cyl(0.13, 0.14, 0.22), Vector3(0, -0.33, 0.01), leather)
+		_part(leg, _boxm(Vector3(0.22, 0.1, 0.32)), Vector3(0, -0.42, 0.06), leather)
+		_legs.append(leg)
+
+	_body = Node3D.new()
+	_visual.add_child(_body)
+	# корпус: широкие латы, ремни крест-накрест, пояс, короткая накидка
+	_part(_body, _cyl(0.36, 0.33, 0.5), Vector3(0, 0.82, 0), steel)
+	_part(_body, _sphere(0.36), Vector3(0, 1.0, 0.02), steel, Vector3.ZERO, Vector3(1.05, 0.8, 0.85))
+	for sgn in [-1.0, 1.0]:
+		_part(_body, _boxm(Vector3(0.07, 0.62, 0.03)), Vector3(0, 0.9, 0.31), leather, Vector3(0, 0, deg_to_rad(32) * sgn))
+	_part(_body, _cyl(0.37, 0.37, 0.08), Vector3(0, 0.6, 0), leather)
+	_part(_body, _boxm(Vector3(0.12, 0.1, 0.03)), Vector3(0, 0.6, 0.37), gold)
+	_part(_body, _boxm(Vector3(0.3, 0.3, 0.03)), Vector3(0, 0.42, 0.33), cloth)
+	# плащ сзади с рваным низом и золотым ромбом
+	_part(_body, _boxm(Vector3(0.6, 0.82, 0.04)), Vector3(0, 0.72, -0.33), cloth, Vector3(deg_to_rad(6), 0, 0))
+	for k in 4:
+		var tooth := PrismMesh.new()
+		tooth.size = Vector3(0.15, 0.13, 0.04)
+		_part(_body, tooth, Vector3(-0.225 + k * 0.15, 0.25, -0.37), cloth, Vector3(0, 0, PI))
+	_part(_body, _boxm(Vector3(0.14, 0.14, 0.02)), Vector3(0, 0.86, -0.36), gold, Vector3(0, 0, PI / 4))
+	# меховой воротник и шарф цвета команды
+	for k in 10:
+		var a := k * TAU / 10.0
+		_part(_body, _sphere(0.1), Vector3(cos(a) * 0.3, 1.2, sin(a) * 0.25), fur)
+	_part(_body, _cyl(0.24, 0.27, 0.12), Vector3(0, 1.22, 0.02), cloth)
+	_part(_body, _boxm(Vector3(0.12, 0.3, 0.04)), Vector3(0.12, 1.06, 0.3), cloth, Vector3(0, 0, -0.25))
+	# огромные наплечники с золотой каймой
+	for sx in [-1.0, 1.0]:
+		_part(_body, _sphere(0.2), Vector3(0.43 * sx, 1.13, 0), dark, Vector3.ZERO, Vector3(1.0, 0.7, 1.0))
+		var rim := TorusMesh.new()
+		rim.inner_radius = 0.15
+		rim.outer_radius = 0.2
+		_part(_body, rim, Vector3(0.43 * sx, 1.08, 0), gold)
+		_part(_body, _capsule(0.1, 0.4), Vector3(0.46 * sx, 0.88, 0.05), leather)
+		_part(_body, _sphere(0.11), Vector3(0.48 * sx, 0.7, 0.1), dark)
+	# шлем: купол, лицевая пластина с прорезью и светящимися глазами
+	_part(_body, _sphere(0.25), Vector3(0, 1.45, 0), dark, Vector3.ZERO, Vector3(1, 1.05, 1))
+	_part(_body, _boxm(Vector3(0.36, 0.3, 0.08)), Vector3(0, 1.4, 0.2), steel)
+	_part(_body, _boxm(Vector3(0.05, 0.3, 0.03)), Vector3(0, 1.4, 0.25), dark)
+	_part(_body, _boxm(Vector3(0.3, 0.05, 0.03)), Vector3(0, 1.45, 0.25), Color(0.04, 0.04, 0.06))
+	for ex in [-0.08, 0.08]:
+		_part(_body, _boxm(Vector3(0.06, 0.035, 0.02)), Vector3(ex, 1.45, 0.265), eye, Vector3.ZERO, Vector3.ONE, true)
+	var band := TorusMesh.new()
+	band.inner_radius = 0.23
+	band.outer_radius = 0.27
+	_part(_body, band, Vector3(0, 1.36, 0), gold)
+	_part(_body, _boxm(Vector3(0.05, 0.08, 0.3)), Vector3(0, 1.69, 0), gold)
+
+	# молот в правой руке
+	_sword = Node3D.new()
+	_sword.position = Vector3(-0.48, 0.72, 0.12)
+	_body.add_child(_sword)
+	_part(_sword, _cyl(0.035, 0.035, 0.9), Vector3(0, 0, 0.32), leather, Vector3(PI / 2, 0, 0))
+	for k in 3:
+		_part(_sword, _cyl(0.042, 0.042, 0.05), Vector3(0, 0, 0.0 + k * 0.12), Color(0.3, 0.18, 0.1), Vector3(PI / 2, 0, 0))
+	_part(_sword, _boxm(Vector3(0.44, 0.32, 0.3)), Vector3(0, 0, 0.8), steel)
+	for cx in [-1.0, 1.0]:
+		_part(_sword, _boxm(Vector3(0.06, 0.36, 0.34)), Vector3(0.22 * cx, 0, 0.8), gold)
+	_part(_sword, _boxm(Vector3(0.18, 0.16, 0.02)), Vector3(0, 0.0, 0.96), gold, Vector3(0, 0, PI / 4))
+	_part(_sword, _sphere(0.05), Vector3(0, 0, -0.14), gold)
+
+
 func _finish_visual() -> void:
 	var tc: Color = main.team_colors[team]
 	_visual.rotation.y = atan2(facing.x, facing.z)
@@ -391,6 +487,16 @@ func _physics_process(delta: float) -> void:
 	if _since_hit > 3.0:
 		hp = minf(max_hp, hp + 20.0 * delta)
 
+	if _leap_t > 0.0:
+		_leap_t -= delta
+		velocity = _leap_dir * 13.0
+		move_and_slide()
+		position.y = 0.0
+		if _leap_t <= 0.0:
+			_sword.rotation.x = 0.7
+			create_tween().tween_property(_sword, "rotation:x", 0.0, 0.3)
+			main.ground_slam(self, global_position, 3.2, 45.0)
+		return
 	if is_player and not autopilot:
 		move_dir = main.get_player_move()
 	else:
@@ -451,6 +557,7 @@ func _spawn_wave(dir: Vector3, dmg: float, life: float, kind := "wave", spd := 1
 	b.speed = spd
 	b.pierce = pierce
 	b.hit_radius = radius
+	b.charge = 0.0 if kind == "wind" else (0.08 if kind == "slam" else 0.12)
 	b.main = main
 	b.shooter = self
 	b.team = team
@@ -464,6 +571,11 @@ func _spawn_wave(dir: Vector3, dmg: float, life: float, kind := "wave", spd := 1
 func _swing() -> void:
 	reveal_t = 1.0
 	var tw := create_tween()
+	if hero == "hammer":                      # замах над головой и удар
+		tw.tween_property(_sword, "rotation:x", -1.9, 0.12)
+		tw.tween_property(_sword, "rotation:x", 0.7, 0.08)
+		tw.tween_property(_sword, "rotation:x", 0.0, 0.25)
+		return
 	if hero == "archer":                      # натянуть лук и отпустить
 		tw.tween_property(_sword, "position:z", 0.08, 0.07)
 		tw.tween_property(_sword, "position:z", 0.26, 0.06)
@@ -484,6 +596,10 @@ func try_attack(aim: Vector3) -> bool:
 	if hero == "archer":
 		_attack_cd = 0.5 if is_player else 0.95
 		_spawn_wave(facing, 17.0, 0.55, "arrow", 22.0)
+	elif hero == "hammer":
+		# удар молотом: широкая короткая волна, задевает всех перед собой
+		_attack_cd = 0.75 if is_player else 1.1
+		_spawn_wave(facing, 30.0, 0.26, "slam", 13.0, true, 1.05)
 	else:
 		_spawn_wave(facing, 20.0, 0.6)
 	main.sfx("swing", global_position, 0.0 if is_player else -4.0)
@@ -497,7 +613,15 @@ func try_super(aim: Vector3) -> bool:
 	facing = _flat(aim)
 	_aim_hold = 0.4
 	_swing()
-	if hero == "archer":
+	if hero == "hammer":
+		# «Удар по земле»: прыжок вперёд, при приземлении — удар по кругу
+		_leap_t = 0.32
+		_leap_dir = facing
+		var tw := create_tween()
+		tw.tween_property(_visual, "position:y", 1.1, 0.16).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+		tw.tween_property(_visual, "position:y", 0.0, 0.16).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		_sword.rotation.x = -1.9
+	elif hero == "archer":
 		# «Стрела ветра»: одна большая стрела, пробивает всех на пути
 		_spawn_wave(facing, 42.0, 0.75, "wind", 24.0, true, 0.95)
 	else:

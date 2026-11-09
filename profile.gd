@@ -17,8 +17,10 @@ const HEROES := {
 		"super": "«Веер клинков» — 7 волн разом"},
 	"archer": {"name": "Лучница", "role": "Стрелок издалека", "hp": 0.55, "dmg": 0.5, "speed": 0.75,
 		"super": "«Стрела ветра» — пробивает всех насквозь"},
+	"hammer": {"name": "Молотобоец", "role": "Танк ближнего боя", "hp": 1.0, "dmg": 0.85, "speed": 0.4,
+		"super": "«Удар по земле» — прыжок и удар по кругу"},
 }
-const HERO_ORDER := ["knight", "archer"]
+const HERO_ORDER := ["knight", "archer", "hammer"]
 
 const MODES := {
 	"charge": {"name": "Зарядка", "desc": "Собирай кристаллы в центре и неси к своему знамени.", "trophies": 0},
