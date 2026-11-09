@@ -12,6 +12,14 @@ const SKINS := {
 }
 const SKIN_ORDER := ["steel", "bronze", "obsidian", "gold"]
 
+const HEROES := {
+	"knight": {"name": "Рыцарь", "role": "Боец с мечом", "hp": 0.8, "dmg": 0.6, "speed": 0.6,
+		"super": "«Веер клинков» — 7 волн разом"},
+	"archer": {"name": "Лучница", "role": "Стрелок издалека", "hp": 0.55, "dmg": 0.5, "speed": 0.75,
+		"super": "«Стрела ветра» — пробивает всех насквозь"},
+}
+const HERO_ORDER := ["knight", "archer"]
+
 const MODES := {
 	"charge": {"name": "Зарядка", "desc": "Собирай кристаллы в центре и неси к своему знамени.", "trophies": 0},
 	"brawl": {"name": "Схватка", "desc": "Командный бой: первыми одолей 10 вражеских рыцарей.", "trophies": 30},
@@ -61,7 +69,7 @@ func _defaults() -> Dictionary:
 	return {
 		"name": "Сэр Рыцарь",
 		"coins": 60, "gems": 5, "trophies": 0, "best_trophies": 0,
-		"skins": ["steel"], "skin": "steel",
+		"skins": ["steel"], "skin": "steel", "hero": "knight",
 		"mode": "charge",
 		"stats": {"matches": 0, "wins": 0, "crystals": 0, "kos": 0},
 		"quests": [], "quest_day": "",

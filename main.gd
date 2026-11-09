@@ -90,7 +90,7 @@ var match_stats := {"crystals": 0, "kos": 0, "hits": 0, "supers": 0}
 
 func _ready() -> void:
 	randomize()
-	for tex_name in ["floor", "stone", "leaves", "bushes", "props"]:
+	for tex_name in ["floor", "stone", "leaves", "bushes", "props", "plate_center", "plate_station"]:
 		_tex[tex_name] = load("res://%s.png" % tex_name)
 	_grid = MAP_TOP.duplicate()
 	for i in range(MAP_TOP.size() - 1, -1, -1):
@@ -184,6 +184,17 @@ func _bush_sprite_mat(i: int, seen: bool) -> StandardMaterial3D:
 	else:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 		m.alpha_scissor_threshold = 0.5
+	return m
+
+
+## Материал плиты (центр, площадки у знамён): картинка целиком на верхней грани диска.
+func _plate(tex_name: String) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = _tex[tex_name]
+	m.albedo_color = Color(0.85, 0.85, 0.9)
+	m.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	m.roughness = 0.9
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	return m
 
 
@@ -323,16 +334,25 @@ func _build_arena() -> void:
 					_bushes.append({"pos": p, "mesh": m, "sprite": spr, "idx": idx})
 
 	# центр, где появляются кристаллы
-	_disc(Vector3.ZERO, 2.3, toon(Color(0.45, 0.42, 0.62)))
-	_disc(Vector3.ZERO, 1.9, toon(Color(0.6, 0.56, 0.8)), 0.08)
+	_disc(Vector3.ZERO, 2.3, toon(Color(0.36, 0.33, 0.5)))
+	_disc(Vector3.ZERO, 2.05, _plate("plate_center"), 0.08)      # круглая плита с узором
 
 	# станции команд: каменный круг + арка со знаменем
 	for t in 2:
 		var s: Vector3 = stations[t]
 		var col: Color = team_colors[t]
 		var back := 1.0 if t == 0 else -1.0
-		_disc(s, 1.8, toon(Color(0.5, 0.47, 0.66)))
-		_disc(s, 1.45, toon(col, true), 0.09)
+		_disc(s, 1.8, _plate("plate_station"))                      # плита с ромбом
+		var glow := MeshInstance3D.new()                              # светящееся кольцо команды
+		var ring := TorusMesh.new()
+		ring.inner_radius = 1.5
+		ring.outer_radius = 1.72
+		ring.rings = 40
+		glow.mesh = ring
+		glow.scale.y = 0.15
+		glow.position = s + Vector3(0, 0.07, 0)
+		glow.material_override = toon(col, true)
+		add_child(glow)
 		for dx in [-1.5, 1.5]:
 			_box(s + Vector3(dx, 1.2, 1.7 * back), Vector3(0.45, 2.4, 0.45), stone)
 		_box(s + Vector3(0, 2.55, 1.7 * back), Vector3(3.5, 0.4, 0.5), stone)
@@ -346,10 +366,15 @@ func _build_arena() -> void:
 ## 0-3 стены, 4 стена со знаменем, 5 флагшток, 6 забор, 7 ящик, 8 бочка, 9 ящик с бочкой,
 ## 10 колья, 11 факел, 12 жаровня, 13 груда камней, 14 камень, 15-16 плиты, 17 трава,
 ## 18 куст, 19 сухое дерево, 20 надгробие, 21 череп, 22 телега, 23-27 обрывы с травой
+## 28 большой камень, 29 камень, 30 галька, 31 камень с травой, 32 колонна, 33 руина,
+## 34 руина со мхом, 35 арка, 36 блок, 37 стена со знаменем-2, 38 руина-2, 39 частокол,
+## 40 груда камней-2, 41 стела со щитом, 42 каменные шпили  (атлас 8 x 6)
 const PROP_SIZES := [3.0, 3.0, 3.0, 3.4, 2.9, 2.6, 1.8, 1.1,
 	1.0, 1.7, 1.6, 1.5, 1.5, 1.9, 1.3, 1.3,
 	1.3, 0.7, 1.8, 2.8, 1.4, 0.8, 1.9, 2.6,
-	2.6, 2.6, 2.6, 2.6]
+	2.6, 2.6, 2.6, 2.6, 2.0, 1.5, 0.5, 1.4,
+	1.9, 2.0, 2.2, 2.8, 1.5, 2.6, 2.2, 1.7,
+	1.9, 1.6, 2.0]
 var _prop_mats := {}
 
 
@@ -357,8 +382,8 @@ func _prop_mat(i: int) -> StandardMaterial3D:
 	if not _prop_mats.has(i):
 		var m := StandardMaterial3D.new()
 		m.albedo_texture = _tex["props"]
-		m.uv1_scale = Vector3(1.0 / 8.0, 1.0 / 4.0, 1)
-		m.uv1_offset = Vector3(float(i % 8) / 8.0, float(i / 8) / 4.0, 0)
+		m.uv1_scale = Vector3(1.0 / 8.0, 1.0 / 6.0, 1)
+		m.uv1_offset = Vector3(float(i % 8) / 8.0, float(i / 8) / 6.0, 0)
 		m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
@@ -389,7 +414,10 @@ func _build_decor() -> void:
 		var x := -17.0
 		var k := 0
 		while x <= 17.0:
-			_prop(4 if absf(x) < 1.0 else [0, 1, 2, 3][k % 4], Vector3(x, 0, z))
+			var wall: int = [0, 33, 1, 34, 2, 38, 3, 35][k % 8]
+			if absf(x) < 1.0:
+				wall = 4 if zs < 0 else 37
+			_prop(wall, Vector3(x, 0, z))
 			x += 3.4
 			k += 1
 		for tx in [-4.6, 4.6]:
@@ -397,7 +425,8 @@ func _build_decor() -> void:
 		for tx in [-2.6, 2.6]:
 			_prop(5, Vector3(tx, 0, z - 1.3 * zs), 0.9)
 	# вдоль боковых изгородей — ящики, бочки, камни, деревья, телеги
-	var side := [7, 8, 9, 13, 14, 15, 16, 17, 18, 19, 20, 22, 10, 12, 11, 6]
+	var side := [7, 8, 9, 13, 14, 15, 18, 19, 20, 22, 10, 12, 11, 6,
+		28, 29, 31, 32, 36, 39, 40, 41, 42]
 	for xs in [-1.0, 1.0]:
 		var z := -HALF_L + 0.5
 		while z < HALF_L:
@@ -407,7 +436,7 @@ func _build_decor() -> void:
 			if idx == 20:                                   # у надгробия череп
 				_prop(21, Vector3(x - 0.8 * xs, 0, z + 0.5), 0.9)
 			elif rng.randf() < 0.35:                        # трава и камешки между крупными
-				_prop([17, 14, 16][rng.randi_range(0, 2)], Vector3(x + rng.randf_range(-0.6, 0.6), 0, z + 1.2), 0.7)
+				_prop([17, 30, 16, 31][rng.randi_range(0, 3)], Vector3(x + rng.randf_range(-0.6, 0.6), 0, z + 1.2), 0.7)
 			z += rng.randf_range(2.3, 3.4)
 		# дальше — земляные обрывы с травой
 		var z2 := -HALF_L - 1.0
@@ -451,6 +480,10 @@ func _spawn_knights() -> void:
 			k.main = self
 			k.team = t
 			k.is_player = (t == 0 and i == 0)
+			# составы: у игрока выбранный герой, у остальных — рыцари и лучницы вперемешку
+			var ph := str(Profile.data.get("hero", "knight"))
+			var comp := [[ph, "knight", "archer"], ["knight", "archer", "knight"]]
+			k.hero = comp[t][i]
 			k.spawn_pos = spots[i]
 			k.position = spots[i]
 			k.facing = Vector3(0, 0, -sgn)

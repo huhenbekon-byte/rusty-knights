@@ -475,39 +475,68 @@ func _page_heroes(col: Control) -> void:
 	pedestal.position.y = -0.08
 	pedestal.material_override = main.toon(Color(0.45, 0.42, 0.75), false, true)
 	_preview_pivot.add_child(pedestal)
+	var hid := str(Profile.data.get("hero", "knight"))
+	var h: Dictionary = Profile.HEROES[hid]
 	var k = KnightScript.new()
 	k.main = main
 	k.team = 0
+	k.hero = hid
 	k.is_player = true
 	k.display_only = true
 	k.facing = Vector3(0, 0, 1)
 	_preview_pivot.add_child(k)
-	_lbl(show, "РЫЦАРЬ", 40, Color.WHITE, Rect2(0, 330, show.size.x, 50))
-	_lbl(show, "Облик: " + str(Profile.SKINS[Profile.data.skin].name), 22, GOLD, Rect2(0, 372, show.size.x, 34))
+	_lbl(show, str(h.name).to_upper(), 40, Color.WHITE, Rect2(0, 330, show.size.x, 50))
+	var sub_text := "Облик: " + str(Profile.SKINS[Profile.data.skin].name) if hid == "knight" else str(h.role)
+	_lbl(show, sub_text, 22, GOLD, Rect2(0, 372, show.size.x, 34))
 
-	# список героев
+	# выбор героя
 	var row := _card(vb, 150, NAVY, INK, 5)
-	var heroes := [["Рыцарь", true], ["Лучница", false], ["Молотобоец", false], ["Маг", false]]
-	for i in heroes.size():
+	var list := [["knight", "Рыцарь", true], ["archer", "Лучница", true], ["", "Молотобоец", false], ["", "Маг", false]]
+	for i in list.size():
+		var id: String = list[i][0]
+		var open: bool = list[i][2]
+		var sel: bool = id == hid
 		var x := 14 + i * 166
-		var hp := _panel(row, Rect2(x, 14, 154, 122), NAVY2 if heroes[i][1] else Color(0.1, 0.1, 0.18), GOLD if i == 0 else INK, 4)
-		_icon(hp, "helm" if heroes[i][1] else "lock", Rect2(47, 6, 60, 60), Profile.skin_colors()[0] if i == 0 else Color.WHITE)
-		_lbl(hp, heroes[i][0], 20, Color.WHITE if heroes[i][1] else Color(0.6, 0.6, 0.75), Rect2(0, 66, 154, 28))
-		if not heroes[i][1]:
+		var hp := _panel(row, Rect2(x, 14, 154, 122), NAVY2 if open else Color(0.1, 0.1, 0.18), GOLD if sel else INK, 5 if sel else 4)
+		var kind := "lock"
+		if id == "knight":
+			kind = "helm"
+		elif id == "archer":
+			kind = "bow"
+		_icon(hp, kind, Rect2(47, 6, 60, 60), Profile.skin_colors()[0] if id == "knight" else Color.WHITE)
+		_lbl(hp, list[i][1], 20, Color.WHITE if open else Color(0.6, 0.6, 0.75), Rect2(0, 66, 154, 28))
+		if not open:
 			_lbl(hp, "скоро", 18, GOLD, Rect2(0, 92, 154, 24))
+		elif sel:
+			_lbl(hp, "выбран", 18, Color(0.6, 1, 0.6), Rect2(0, 92, 154, 24))
+		if open and not sel:
+			var pick := Button.new()
+			pick.flat = true
+			pick.focus_mode = Control.FOCUS_NONE
+			pick.size = hp.size
+			hp.add_child(pick)
+			hp.mouse_filter = Control.MOUSE_FILTER_PASS
+			pick.pressed.connect(func():
+				main.sfx("click")
+				Profile.data.hero = id
+				Profile.save()
+				show_page("heroes"))
 
 	# характеристики
 	var stats := _card(vb, 190, NAVY, INK, 5)
-	var rows := [["Здоровье", 0.8], ["Урон", 0.6], ["Скорость", 0.6]]
+	var rows := [["Здоровье", h.hp], ["Урон", h.dmg], ["Скорость", h.speed]]
 	for i in rows.size():
 		_lbl(stats, rows[i][0], 26, Color(0.9, 0.9, 1.0), Rect2(30, 18 + i * 46, 200, 40), HORIZONTAL_ALIGNMENT_LEFT)
-		_bar(stats, Rect2(240, 26 + i * 46, 400, 26), rows[i][1], GOLD)
-	_lbl(stats, "Супер: «Веер клинков» — 7 волн разом", 22, Color(1, 0.85, 0.45), Rect2(0, 150, stats.size.x, 32))
+		_bar(stats, Rect2(240, 26 + i * 46, 400, 26), float(rows[i][1]), GOLD)
+	_lbl(stats, "Супер: " + str(h.super), 22, Color(1, 0.85, 0.45), Rect2(0, 150, stats.size.x, 32))
 
-	# облики
+	# облики (пока только у рыцаря)
 	var head := Control.new()
 	head.custom_minimum_size = Vector2(700, 70)
 	vb.add_child(head)
+	if hid != "knight":
+		_lbl(head, "Облики лучницы — скоро", 30, Color(0.75, 0.75, 0.95), Rect2(0, 10, 700, 56))
+		return
 	_lbl(head, "Облики доспехов", 34, Color(1, 0.95, 0.8), Rect2(0, 10, 700, 56))
 	for pair in [[0, 1], [2, 3]]:
 		var line := Control.new()

@@ -1,6 +1,6 @@
 extends Control
 ## Векторные иконки интерфейса — рисуются кодом, без картинок.
-## kind: coin, gem, crystal, trophy, chest, scroll, swords, helm, gear, lock, people, play, star, check, close
+## kind: coin, gem, crystal, trophy, chest, scroll, swords, helm, bow, gear, lock, people, play, star, check, close
 
 var kind := "coin"
 var tint := Color.WHITE       # цвет корпуса (шлем — облик, сундук — тип)
@@ -144,6 +144,20 @@ func _draw() -> void:
 					body.append(Vector2(x + cos(a) * 0.38 * sc, 0.72 + sin(a) * 0.5 * sc))
 				_poly(body, spec[1])
 				_circle(Vector2(x, -0.12 - (0.0 if x == 0.0 else -0.06)), 0.24 * sc, spec[1])
+		"bow":
+			var arc := PackedVector2Array()
+			for i in 17:
+				var t := lerpf(-1.25, 1.25, float(i) / 16.0)
+				arc.append(_c() + Vector2(-0.35 + cos(t) * 0.75, sin(t) * 0.85) * _s())
+			draw_polyline(arc, OUT, 0.32 * _s(), true)
+			draw_polyline(arc, Color(0.62, 0.38, 0.2), 0.18 * _s(), true)
+			var top := arc[0]
+			var bot := arc[arc.size() - 1]
+			draw_line(top, bot, Color(0.95, 0.93, 0.85), maxf(1.5, 0.05 * _s()), true)
+			_rect(0.3, -0.12, 0.48, 0.12, Color(1.0, 0.78, 0.28))
+			_line(Vector2(-0.6, 0), Vector2(0.75, 0), OUT, 0.14)
+			_line(Vector2(-0.6, 0), Vector2(0.75, 0), Color(0.85, 0.7, 0.45), 0.07)
+			_poly([Vector2(0.95, 0), Vector2(0.72, -0.12), Vector2(0.72, 0.12)], Color(0.9, 0.92, 0.97))
 		"play":
 			_poly([Vector2(-0.42, -0.62), Vector2(0.62, 0), Vector2(-0.42, 0.62)], Color.WHITE)
 		"star":
