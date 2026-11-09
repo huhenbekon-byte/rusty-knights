@@ -90,7 +90,7 @@ var match_stats := {"crystals": 0, "kos": 0, "hits": 0, "supers": 0}
 
 func _ready() -> void:
 	randomize()
-	for tex_name in ["grass", "stone", "leaves", "bushes"]:
+	for tex_name in ["floor", "stone", "leaves", "bushes", "props"]:
 		_tex[tex_name] = load("res://%s.png" % tex_name)
 	_grid = MAP_TOP.duplicate()
 	for i in range(MAP_TOP.size() - 1, -1, -1):
@@ -276,15 +276,18 @@ func _cell_pos(col: int, row: int) -> Vector3:
 func _build_arena() -> void:
 	# трава двора
 	# пол: атлас 4x4 плитки = 4 м
-	_box(Vector3(0, -0.25, 0), Vector3(HALF_W * 2 + 8, 0.5, HALF_L * 2 + 8), _textured("grass", Color.WHITE, 0.25), false)
+	# пол: плитка песчаника (картинка 3:2 ≈ 6 x 4 м), шире арены — под декорациями тоже пол
+	var floor_mat := _textured("floor", Color.WHITE, 1.0)
+	floor_mat.uv1_scale = Vector3(1.0 / 6.0, 1.0 / 6.0, 1.0 / 4.0)
+	_box(Vector3(0, -0.25, 0), Vector3(HALF_W * 2 + 24, 0.5, HALF_L * 2 + 20), floor_mat, false)
 
 	# живая изгородь по периметру (твёрдая)
 	var hedge := _textured("leaves", Color(0.75, 0.85, 0.75), 0.7)
 	var hh := 1.6
-	_box(Vector3(0, hh / 2, -HALF_L - 1), Vector3(HALF_W * 2 + 4, hh, 2), hedge)
-	_box(Vector3(0, hh / 2, HALF_L + 1), Vector3(HALF_W * 2 + 4, hh, 2), hedge)
-	_box(Vector3(-HALF_W - 1, hh / 2, 0), Vector3(2, hh, HALF_L * 2), hedge)
-	_box(Vector3(HALF_W + 1, hh / 2, 0), Vector3(2, hh, HALF_L * 2), hedge)
+	_box(Vector3(0, hh / 2, -HALF_L - 0.5), Vector3(HALF_W * 2 + 2, hh, 1), hedge)
+	_box(Vector3(0, hh / 2, HALF_L + 0.5), Vector3(HALF_W * 2 + 2, hh, 1), hedge)
+	_box(Vector3(-HALF_W - 0.5, hh / 2, 0), Vector3(1, hh, HALF_L * 2), hedge)
+	_box(Vector3(HALF_W + 0.5, hh / 2, 0), Vector3(1, hh, HALF_L * 2), hedge)
 
 	# блоки и кусты по карте
 	var stone := _textured("stone", Color.WHITE, 0.5)     # атлас 2x2 = 2 м
@@ -317,20 +320,101 @@ func _build_arena() -> void:
 					_bushes.append({"pos": p, "mesh": m, "sprite": spr, "idx": idx})
 
 	# центр, где появляются кристаллы
-	_disc(Vector3.ZERO, 2.3, toon(Color(0.86, 0.76, 0.5)))
-	_disc(Vector3.ZERO, 1.9, toon(Color(0.95, 0.86, 0.58)), 0.08)
+	_disc(Vector3.ZERO, 2.3, toon(Color(0.45, 0.42, 0.62)))
+	_disc(Vector3.ZERO, 1.9, toon(Color(0.6, 0.56, 0.8)), 0.08)
 
 	# станции команд: каменный круг + арка со знаменем
 	for t in 2:
 		var s: Vector3 = stations[t]
 		var col: Color = team_colors[t]
 		var back := 1.0 if t == 0 else -1.0
-		_disc(s, 1.8, toon(Color(0.85, 0.8, 0.72)))
+		_disc(s, 1.8, toon(Color(0.5, 0.47, 0.66)))
 		_disc(s, 1.45, toon(col, true), 0.09)
 		for dx in [-1.5, 1.5]:
 			_box(s + Vector3(dx, 1.2, 1.7 * back), Vector3(0.45, 2.4, 0.45), stone)
 		_box(s + Vector3(0, 2.55, 1.7 * back), Vector3(3.5, 0.4, 0.5), stone)
 		_box(s + Vector3(0, 1.7, 1.7 * back), Vector3(1.2, 1.3, 0.06), toon(col), false)
+	_build_decor()
+
+
+# ---------------------------------------------------------------- декорации за картой
+
+## Предметы из props.png (атлас 8 x 4 клетки по 256 px). Индекс -> размер в метрах.
+## 0-3 стены, 4 стена со знаменем, 5 флагшток, 6 забор, 7 ящик, 8 бочка, 9 ящик с бочкой,
+## 10 колья, 11 факел, 12 жаровня, 13 груда камней, 14 камень, 15-16 плиты, 17 трава,
+## 18 куст, 19 сухое дерево, 20 надгробие, 21 череп, 22 телега, 23-27 обрывы с травой
+const PROP_SIZES := [3.0, 3.0, 3.0, 3.4, 2.9, 2.6, 1.8, 1.1,
+	1.0, 1.7, 1.6, 1.5, 1.5, 1.9, 1.3, 1.3,
+	1.3, 0.7, 1.8, 2.8, 1.4, 0.8, 1.9, 2.6,
+	2.6, 2.6, 2.6, 2.6]
+var _prop_mats := {}
+
+
+func _prop_mat(i: int) -> StandardMaterial3D:
+	if not _prop_mats.has(i):
+		var m := StandardMaterial3D.new()
+		m.albedo_texture = _tex["props"]
+		m.uv1_scale = Vector3(1.0 / 8.0, 1.0 / 4.0, 1)
+		m.uv1_offset = Vector3(float(i % 8) / 8.0, float(i / 8) / 4.0, 0)
+		m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		m.alpha_scissor_threshold = 0.5
+		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		_prop_mats[i] = m
+	return _prop_mats[i]
+
+
+func _prop(i: int, pos: Vector3, scl := 1.0) -> void:
+	var s: float = float(PROP_SIZES[i]) * scl
+	var mi := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(s, s)
+	mi.mesh = q
+	mi.position = Vector3(pos.x, s * 0.5 - 0.02, pos.z)
+	mi.material_override = _prop_mat(i)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+
+
+func _build_decor() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 2026
+	# крепостные стены за дальними краями, в середине — стена со знаменем, по бокам жаровни
+	for zs in [-1.0, 1.0]:
+		var z: float = (HALF_L + 2.2) * zs
+		var x := -17.0
+		var k := 0
+		while x <= 17.0:
+			_prop(4 if absf(x) < 1.0 else [0, 1, 2, 3][k % 4], Vector3(x, 0, z))
+			x += 3.4
+			k += 1
+		for tx in [-4.6, 4.6]:
+			_prop(12, Vector3(tx, 0, z - 0.9 * zs))
+		for tx in [-2.6, 2.6]:
+			_prop(5, Vector3(tx, 0, z - 1.3 * zs), 0.9)
+	# вдоль боковых изгородей — ящики, бочки, камни, деревья, телеги
+	var side := [7, 8, 9, 13, 14, 15, 16, 17, 18, 19, 20, 22, 10, 12, 11, 6]
+	for xs in [-1.0, 1.0]:
+		var z := -HALF_L + 0.5
+		while z < HALF_L:
+			var idx: int = side[rng.randi_range(0, side.size() - 1)]
+			var x: float = (HALF_W + 1.6 + rng.randf_range(-0.1, 0.4)) * xs
+			_prop(idx, Vector3(x, 0, z), rng.randf_range(0.85, 1.1))
+			if idx == 20:                                   # у надгробия череп
+				_prop(21, Vector3(x - 0.8 * xs, 0, z + 0.5), 0.9)
+			elif rng.randf() < 0.35:                        # трава и камешки между крупными
+				_prop([17, 14, 16][rng.randi_range(0, 2)], Vector3(x + rng.randf_range(-0.6, 0.6), 0, z + 1.2), 0.7)
+			z += rng.randf_range(2.3, 3.4)
+		# дальше — земляные обрывы с травой
+		var z2 := -HALF_L - 1.0
+		while z2 < HALF_L + 1.0:
+			_prop([23, 24, 25][rng.randi_range(0, 2)], Vector3((HALF_W + 3.6) * xs, 0, z2))
+			z2 += 2.5
+	# углы
+	for c in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
+		_prop(19, Vector3((HALF_W + 2.2) * c.x, 0, (HALF_L + 1.0) * c.y))
+		_prop(13, Vector3((HALF_W + 1.3) * c.x, 0, (HALF_L + 0.2) * c.y), 0.9)
 
 
 func is_bush(pos: Vector3) -> bool:
@@ -509,7 +593,7 @@ func _process(delta: float) -> void:
 	_hint_t -= delta
 	var target: Vector3 = player.global_position if player.alive else player.spawn_pos
 	var cam_target := target + CAM_OFFSET
-	cam_target.x = clampf(cam_target.x, -7.0, 7.0)
+	cam_target.x = clampf(cam_target.x, -8.5, 8.5)
 	_camera.position = _camera.position.lerp(cam_target, clampf(delta * 5.0, 0.0, 1.0))
 	if _shake > 0.0:                                 # тряска камеры
 		_camera.position += Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)) * _shake * 0.35
