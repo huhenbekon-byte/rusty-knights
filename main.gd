@@ -53,6 +53,12 @@ var _mat_cache := {}
 var _tex := {}
 var _bush_mat: StandardMaterial3D
 var _bush_mat_seen: StandardMaterial3D
+const SFX_NAMES := ["swing", "hit", "wall", "death", "pickup", "score", "ready",
+	"super", "win", "lose", "click", "respawn"]
+var _sfx := {}
+var _sfx_pool: Array = []
+var _sfx_next := 0
+var _music: AudioStreamPlayer
 var _sprite_mats: Array = []
 var _sprite_mats_seen: Array = []
 const BUSH_SPRITES := 6        # спрайтов в bushes.png (в ряд по 256x256)
@@ -85,6 +91,7 @@ func _ready() -> void:
 	_build_arena()
 	_spawn_knights()
 	_build_ui()
+	_setup_audio()
 	_setup_screenshots()
 
 
@@ -439,7 +446,9 @@ func _build_ui() -> void:
 	again.label_text = "ЕЩЁ РАЗ"
 	again.color = Color(0.3, 0.8, 0.4)
 	_anchor(again, 0.5, 0.5, 0.5, 0.5, -120, 0, 120, 240)
-	again.pressed.connect(func(): get_tree().reload_current_scene())
+	again.pressed.connect(func():
+		sfx("click")
+		get_tree().reload_current_scene())
 	_result.add_child(again)
 
 
@@ -541,10 +550,12 @@ func _handle_pickups() -> void:
 				k.carried += 1
 				batteries.remove_at(i)
 				b.queue_free()
+				sfx("pickup", kp, 0.0 if k.is_player else -5.0)
 		var st: Vector3 = stations[k.team]
 		if k.carried > 0 and Vector2(st.x - kp.x, st.z - kp.z).length() < 1.8:
 			score[k.team] += k.carried
 			k.carried = 0
+			sfx("score", null, 0.0 if k.team == player.team else -6.0)
 			if score[k.team] >= WIN_SCORE:
 				_end_game(k.team)
 				return
@@ -555,6 +566,48 @@ func _end_game(winner: int) -> void:
 	_result.visible = true
 	_result_label.text = "ПОБЕДА!" if winner == player.team else "ПОРАЖЕНИЕ"
 	_result_label.add_theme_color_override("font_color", team_colors[winner])
+	_music.volume_db = -26.0
+	sfx("win" if winner == player.team else "lose")
+
+
+# ---------------------------------------------------------------- звук
+
+func _setup_audio() -> void:
+	for n in SFX_NAMES:
+		_sfx[n] = load("res://sfx_%s.wav" % n)
+	for i in 16:
+		var p := AudioStreamPlayer.new()
+		add_child(p)
+		_sfx_pool.append(p)
+	_music = AudioStreamPlayer.new()
+	_music.stream = load("res://music.wav")
+	_music.volume_db = -11.0
+	add_child(_music)
+	_music.finished.connect(func(): _music.play())   # музыка по кругу
+	_music.play()
+
+
+## Проиграть звук. pos — где он прозвучал (дальше от игрока — тише), null — без затухания.
+func sfx(sound: String, pos = null, volume := 0.0) -> void:
+	if not _sfx.has(sound):
+		return
+	if pos != null and player:
+		var d: float = (pos as Vector3).distance_to(player.global_position)
+		if d > 16.0:
+			return
+		volume -= d * 1.1
+	var p: AudioStreamPlayer = null
+	for cand in _sfx_pool:
+		if not cand.playing:
+			p = cand
+			break
+	if p == null:
+		p = _sfx_pool[_sfx_next]
+		_sfx_next = (_sfx_next + 1) % _sfx_pool.size()
+	p.stream = _sfx[sound]
+	p.volume_db = volume
+	p.pitch_scale = randf_range(0.93, 1.07) if sound in ["swing", "hit", "wall", "pickup"] else 1.0
+	p.play()
 
 
 # ---------------------------------------------------------------- для рыцарей

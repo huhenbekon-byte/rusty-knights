@@ -102,61 +102,106 @@ func _boxm(size: Vector3) -> BoxMesh:
 	return m
 
 
+func _kite(parent: Node3D, scale_k: float, depth: float, z: float, color: Color) -> void:
+	# щит-«капля»: выдавленный многоугольник
+	var poly := CSGPolygon3D.new()
+	var pts := PackedVector2Array([
+		Vector2(-0.27, 0.28), Vector2(0.27, 0.28), Vector2(0.27, 0.02),
+		Vector2(0.16, -0.26), Vector2(0.0, -0.46), Vector2(-0.16, -0.26), Vector2(-0.27, 0.02)])
+	for i in pts.size():
+		pts[i] = pts[i] * scale_k
+	poly.polygon = pts
+	poly.depth = depth
+	poly.position.z = z
+	poly.material = main.toon(color, false, true)
+	parent.add_child(poly)
+
+
 func _build_visual() -> void:
 	_visual = Node3D.new()
 	add_child(_visual)
 	var tc: Color = main.team_colors[team]
-	var steel := Color(0.8, 0.83, 0.88)
-	var dark_steel := Color(0.42, 0.44, 0.5)
-	var leather := Color(0.48, 0.3, 0.18)
-	var gold := Color(1.0, 0.8, 0.3)
+	var cloth := tc.darkened(0.3)                    # накидка и щит — цвет команды
+	var steel := Color(0.62, 0.64, 0.7)
+	var dark_steel := Color(0.36, 0.37, 0.42)
+	var under := Color(0.2, 0.17, 0.17)              # поддоспешник
+	var leather := Color(0.32, 0.21, 0.14)
+	var silver := Color(0.86, 0.87, 0.9)             # крест
+	var black := Color(0.05, 0.04, 0.06)
 
-	# ноги
-	for sx in [-0.14, 0.14]:
+	# ноги: поножи, наколенники, сабатоны
+	for sx in [-0.15, 0.15]:
 		var leg := Node3D.new()
-		leg.position = Vector3(sx, 0.48, 0)
+		leg.position = Vector3(sx, 0.5, 0)
 		_visual.add_child(leg)
-		_part(leg, _capsule(0.11, 0.5), Vector3(0, -0.22, 0), dark_steel)
-		_part(leg, _boxm(Vector3(0.2, 0.1, 0.3)), Vector3(0, -0.43, 0.05), dark_steel)
+		_part(leg, _capsule(0.11, 0.5), Vector3(0, -0.2, 0), under)
+		_part(leg, _cyl(0.12, 0.1, 0.26), Vector3(0, -0.3, 0.01), steel)
+		_part(leg, _sphere(0.1), Vector3(0, -0.12, 0.07), steel, Vector3.ZERO, Vector3(1, 1, 0.8))
+		_part(leg, _boxm(Vector3(0.18, 0.09, 0.32)), Vector3(0, -0.46, 0.05), dark_steel)
 		_legs.append(leg)
 
 	_body = Node3D.new()
 	_visual.add_child(_body)
-	# туника цвета команды и пояс
-	_part(_body, _cyl(0.25, 0.36, 0.42), Vector3(0, 0.62, 0), tc)
-	_part(_body, _cyl(0.29, 0.29, 0.08), Vector3(0, 0.76, 0), leather)
-	_part(_body, _boxm(Vector3(0.08, 0.07, 0.04)), Vector3(0, 0.76, 0.29), gold)
-	# кираса
-	_part(_body, _sphere(0.3), Vector3(0, 0.98, 0), steel, Vector3.ZERO, Vector3(1.0, 0.95, 0.85))
-	_part(_body, _boxm(Vector3(0.16, 0.2, 0.04)), Vector3(0, 1.0, 0.25), tc)   # герб
-	# наплечники
-	for sx in [-0.31, 0.31]:
-		_part(_body, _sphere(0.14), Vector3(sx, 1.13, 0), steel, Vector3.ZERO, Vector3(1, 0.75, 1))
-	# шлем
-	_part(_body, _sphere(0.26), Vector3(0, 1.42, 0), steel, Vector3.ZERO, Vector3(1, 1.05, 1))
-	_part(_body, _cyl(0.27, 0.27, 0.06), Vector3(0, 1.36, 0), dark_steel)
-	_part(_body, _boxm(Vector3(0.3, 0.05, 0.06)), Vector3(0, 1.43, 0.23), Color(0.06, 0.05, 0.08))
-	_part(_body, _boxm(Vector3(0.04, 0.16, 0.06)), Vector3(0, 1.34, 0.24), Color(0.06, 0.05, 0.08))
-	# плюмаж
-	_part(_body, _capsule(0.08, 0.5), Vector3(0, 1.72, -0.1), tc, Vector3(deg_to_rad(-55), 0, 0))
-	_part(_body, _sphere(0.05), Vector3(0, 1.69, 0.02), gold)
-	# щит (левая рука)
+	# корпус: кольчуга, кираса
+	_part(_body, _cyl(0.26, 0.3, 0.45), Vector3(0, 0.78, 0), dark_steel)
+	_part(_body, _sphere(0.3), Vector3(0, 1.0, 0.0), steel, Vector3.ZERO, Vector3(1.05, 0.9, 0.85))
+	# длинная накидка спереди и сзади с рваным низом
+	for zs in [1.0, -1.0]:
+		var zz: float = 0.315 * zs
+		_part(_body, _boxm(Vector3(0.34, 0.66, 0.03)), Vector3(0, 0.72, zz), cloth)
+		for i in 3:
+			var tooth := PrismMesh.new()
+			tooth.size = Vector3(0.11, 0.1, 0.03)
+			_part(_body, tooth, Vector3(-0.11 + i * 0.11, 0.34, zz), cloth, Vector3(0, 0, PI))
+		# крест
+		_part(_body, _boxm(Vector3(0.05, 0.26, 0.02)), Vector3(0, 0.86, zz + 0.02 * zs), silver)
+		_part(_body, _boxm(Vector3(0.18, 0.05, 0.02)), Vector3(0, 0.9, zz + 0.02 * zs), silver)
+	# пояс с пряжкой
+	_part(_body, _cyl(0.3, 0.3, 0.06), Vector3(0, 0.66, 0), leather)
+	_part(_body, _boxm(Vector3(0.08, 0.07, 0.03)), Vector3(0, 0.66, 0.3), steel)
+	# многослойные наплечники и руки
+	for sx in [-1.0, 1.0]:
+		for i in 3:
+			var r := 0.17 - i * 0.025
+			_part(_body, _sphere(r), Vector3(0.32 * sx, 1.16 - i * 0.08, 0), steel if i % 2 == 0 else cloth,
+				Vector3.ZERO, Vector3(1.0, 0.55, 1.0))
+		_part(_body, _capsule(0.08, 0.36), Vector3(0.36 * sx, 0.92, 0.03), steel)
+	# топфхельм: цилиндр с плоским верхом, смотровая щель и дырочки для дыхания
+	_part(_body, _cyl(0.21, 0.23, 0.38), Vector3(0, 1.42, 0), steel)
+	_part(_body, _cyl(0.17, 0.21, 0.06), Vector3(0, 1.63, 0), steel)
+	_part(_body, _cyl(0.225, 0.225, 0.07), Vector3(0, 1.57, 0), cloth)   # тканевый обод цвета команды
+	_part(_body, _boxm(Vector3(0.03, 0.34, 0.03)), Vector3(0, 1.42, 0.225), dark_steel)
+	_part(_body, _boxm(Vector3(0.34, 0.045, 0.04)), Vector3(0, 1.47, 0.21), black)
+	for i in 3:                                       # дырочки для дыхания
+		for hx in [-0.08, 0.08]:
+			_part(_body, _boxm(Vector3(0.035, 0.025, 0.03)), Vector3(hx, 1.37 - i * 0.045, 0.218), black)
+	_part(_body, _cyl(0.24, 0.24, 0.04), Vector3(0, 1.25, 0), dark_steel)
+
+	# щит-«капля» на левой руке
 	var shield := Node3D.new()
-	shield.position = Vector3(0.42, 0.9, 0.12)
-	shield.rotation = Vector3(0, deg_to_rad(20), deg_to_rad(90))
+	shield.position = Vector3(0.46, 0.88, 0.1)
+	shield.rotation = Vector3(0, deg_to_rad(70), 0)
 	_body.add_child(shield)
-	_part(shield, _cyl(0.3, 0.3, 0.05), Vector3.ZERO, gold)
-	_part(shield, _cyl(0.25, 0.25, 0.07), Vector3.ZERO, tc)
-	_part(shield, _sphere(0.07), Vector3(0, 0.05, 0), steel)
-	# меч (правая рука)
+	_kite(shield, 1.12, 0.04, -0.02, dark_steel)     # обод
+	_kite(shield, 1.0, 0.05, 0.0, cloth)
+	_part(shield, _boxm(Vector3(0.06, 0.5, 0.02)), Vector3(0, -0.04, 0.03), silver)
+	_part(shield, _boxm(Vector3(0.34, 0.06, 0.02)), Vector3(0, 0.08, 0.03), silver)
+
+	# длинный меч в правой руке
 	_sword = Node3D.new()
-	_sword.position = Vector3(-0.4, 0.88, 0.12)
+	_sword.position = Vector3(-0.42, 0.78, 0.12)
 	_body.add_child(_sword)
-	_part(_sword, _sphere(0.09), Vector3.ZERO, steel)                           # латная перчатка
-	_part(_sword, _boxm(Vector3(0.05, 0.05, 0.16)), Vector3(0, 0, -0.04), leather)
-	_part(_sword, _boxm(Vector3(0.26, 0.06, 0.06)), Vector3(0, 0, 0.07), gold)  # гарда
-	_part(_sword, _boxm(Vector3(0.09, 0.03, 0.62)), Vector3(0, 0, 0.41), Color(0.92, 0.95, 1.0))
-	_part(_sword, _sphere(0.045), Vector3(0, 0, -0.14), gold)
+	_part(_sword, _sphere(0.09), Vector3.ZERO, steel)                               # перчатка
+	_part(_sword, _boxm(Vector3(0.05, 0.05, 0.2)), Vector3(0, 0, -0.04), leather)   # рукоять
+	_part(_sword, _boxm(Vector3(0.07, 0.07, 0.07)), Vector3(0, 0, -0.16), steel, Vector3(0, 0, PI / 4))
+	_part(_sword, _boxm(Vector3(0.34, 0.05, 0.05)), Vector3(0, 0, 0.08), dark_steel)  # гарда
+	for gx in [-0.17, 0.17]:
+		_part(_sword, _boxm(Vector3(0.06, 0.06, 0.06)), Vector3(gx, 0, 0.08), dark_steel, Vector3(0, PI / 4, 0))
+	_part(_sword, _boxm(Vector3(0.085, 0.025, 0.82)), Vector3(0, 0, 0.51), Color(0.85, 0.87, 0.92))
+	_part(_sword, _boxm(Vector3(0.02, 0.03, 0.7)), Vector3(0, 0, 0.47), Color(0.6, 0.62, 0.68))  # дол
+	var tip := PrismMesh.new()
+	tip.size = Vector3(0.085, 0.1, 0.025)
+	_part(_sword, tip, Vector3(0, 0, 0.97), Color(0.85, 0.87, 0.92), Vector3(PI / 2, 0, 0))
 
 	_visual.rotation.y = atan2(facing.x, facing.z)
 
@@ -305,6 +350,7 @@ func try_attack(aim: Vector3) -> bool:
 	_aim_hold = 0.35
 	_swing()
 	_spawn_wave(facing, 20.0, 0.6)
+	main.sfx("swing", global_position, 0.0 if is_player else -4.0)
 	return true
 
 
@@ -318,11 +364,15 @@ func try_super(aim: Vector3) -> bool:
 	for i in 7:
 		var a := deg_to_rad(-30.0 + i * 10.0)
 		_spawn_wave(facing.rotated(Vector3.UP, a), 28.0, 0.75)
+	main.sfx("super", global_position)
 	return true
 
 
 func add_charge(amount: float) -> void:
+	var was_ready := super_charge >= 1.0
 	super_charge = minf(1.0, super_charge + amount)
+	if is_player and not was_ready and super_charge >= 1.0:
+		main.sfx("ready")
 
 
 func take_damage(amount: float, _attacker) -> void:
@@ -330,6 +380,7 @@ func take_damage(amount: float, _attacker) -> void:
 		return
 	hp -= amount
 	_since_hit = 0.0
+	main.sfx("hit", global_position, 0.0 if is_player else -2.0)
 	reveal_t = maxf(reveal_t, 0.6)
 	var tw := create_tween()
 	tw.tween_property(_visual, "scale", Vector3.ONE, 0.15).from(Vector3(1.2, 0.85, 1.2))
@@ -342,6 +393,7 @@ func _die() -> void:
 	visible = false
 	collision_layer = 0
 	_respawn_t = 3.0
+	main.sfx("death", global_position)
 	main.on_knight_died(self)
 
 
@@ -352,6 +404,8 @@ func _respawn() -> void:
 	visible = true
 	collision_layer = 2
 	_visual.scale = Vector3.ONE
+	if is_player:
+		main.sfx("respawn")
 
 
 func respawn_left() -> float:

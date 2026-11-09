@@ -42,6 +42,7 @@ func _physics_process(delta: float) -> void:
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if not hit.is_empty():
+		main.sfx("wall", global_position, -7.0)
 		queue_free()
 		return
 	global_position = to
