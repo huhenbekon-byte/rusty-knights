@@ -6,7 +6,9 @@ const BoltScript = preload("res://bolt.gd")
 
 var team := 0
 var is_player := false
-var autopilot := false   # игрок под управлением бота (для автоскриншотов)
+var autopilot := false   # игрок под управлением бота (меню, автоскриншоты)
+var display_only := false  # витрина в меню: только модель, без логики
+var _last_attacker = null
 var main  # главная сцена (main.gd)
 var spawn_pos := Vector3.ZERO
 
@@ -42,6 +44,10 @@ var _carry_label: Label3D
 
 
 func _ready() -> void:
+	if display_only:
+		_build_visual()
+		set_physics_process(false)
+		return
 	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	collision_layer = 2
 	collision_mask = 1
@@ -125,6 +131,10 @@ func _build_visual() -> void:
 	var cloth := tc.darkened(0.3)                    # накидка и щит — цвет команды
 	var steel := Color(0.62, 0.64, 0.7)
 	var dark_steel := Color(0.36, 0.37, 0.42)
+	if is_player:                                    # облик доспехов из профиля
+		var sk: Array = Profile.skin_colors()
+		steel = sk[0]
+		dark_steel = sk[1]
 	var under := Color(0.2, 0.17, 0.17)              # поддоспешник
 	var leather := Color(0.32, 0.21, 0.14)
 	var silver := Color(0.86, 0.87, 0.9)             # крест
@@ -205,6 +215,8 @@ func _build_visual() -> void:
 	_part(_sword, tip, Vector3(0, 0, 0.97), Color(0.85, 0.87, 0.92), Vector3(PI / 2, 0, 0))
 
 	_visual.rotation.y = atan2(facing.x, facing.z)
+	if display_only:
+		return
 
 	# кольцо-маркер под героем
 	var ring := MeshInstance3D.new()
@@ -372,6 +384,8 @@ func try_super(aim: Vector3) -> bool:
 		var a := deg_to_rad(-30.0 + i * 10.0)
 		_spawn_wave(facing.rotated(Vector3.UP, a), 28.0, 0.75)
 	main.sfx("super", global_position)
+	if is_player:
+		main.note("supers")
 	main.fx_ring(global_position, main.team_colors[team], 3.4, 0.4)
 	main.fx_burst(global_position + Vector3(0, 0.9, 0), Color(1, 0.9, 0.5), 18, 6.0, 0.07, 0.45, -4.0)
 	if is_player:
@@ -386,9 +400,12 @@ func add_charge(amount: float) -> void:
 		main.sfx("ready")
 
 
-func take_damage(amount: float, _attacker) -> void:
+func take_damage(amount: float, attacker) -> void:
 	if not alive:
 		return
+	_last_attacker = attacker
+	if attacker != null and is_instance_valid(attacker) and attacker == main.player:
+		main.note("hits")
 	hp -= amount
 	_since_hit = 0.0
 	main.sfx("hit", global_position, 0.0 if is_player else -2.0)
@@ -415,7 +432,7 @@ func _die() -> void:
 	main.fx_burst(global_position + Vector3(0, 0.8, 0), (main.team_colors[team] as Color).darkened(0.3), 8, 4.5, 0.14, 1.0, -12.0)
 	main.fx_ring(global_position, Color(0.8, 0.8, 0.9), 2.0, 0.5)
 	main.shake(0.6, global_position)
-	main.on_knight_died(self)
+	main.on_knight_died(self, _last_attacker)
 
 
 func _respawn() -> void:
@@ -468,6 +485,13 @@ func _think(delta: float) -> void:
 		var approach := to2.normalized() * clampf((d - 4.5) * 0.5, -1.0, 1.0)
 		move_dir = (approach + side * 0.8).normalized()
 		return
+	elif main.mode == "brawl":
+		# «Схватка»: ищем ближайшего видимого врага по всей арене
+		var far = main.nearest_enemy(self, 60.0)
+		if far:
+			target = far.global_position
+		elif hp < max_hp:
+			target = home
 	else:
 		var bat = main.nearest_battery(global_position)
 		if bat:

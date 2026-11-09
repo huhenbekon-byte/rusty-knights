@@ -7,6 +7,8 @@ const KnightScript = preload("res://knight.gd")
 const JoystickScript = preload("res://joystick.gd")
 const TouchButtonScript = preload("res://touch_button.gd")
 const ScoreBarScript = preload("res://score_bar.gd")
+const MenuScript = preload("res://menu.gd")
+const IconScript = preload("res://icon.gd")
 
 const HALF_W := 12.0
 const HALF_L := 20.0
@@ -81,8 +83,9 @@ var music_on := true
 var _shake := 0.0
 var _hud: Control
 var _menu: Control
-var _sound_btn: Button
-var _music_btn: Button
+var shake_on := true
+var mode := "charge"
+var match_stats := {"crystals": 0, "kos": 0, "hits": 0, "supers": 0}
 
 
 func _ready() -> void:
@@ -97,6 +100,9 @@ func _ready() -> void:
 			rev += src[j]
 		_grid.append(rev)
 	_load_settings()
+	mode = str(Profile.data.mode)
+	if not Profile.mode_unlocked(mode):
+		mode = "charge"
 	_build_world()
 	_build_arena()
 	_spawn_knights()
@@ -464,15 +470,11 @@ func _build_ui() -> void:
 	_result.mouse_filter = Control.MOUSE_FILTER_STOP
 	var again := _make_button("ЕЩЁ РАЗ", Color(0.3, 0.75, 0.35), 52)
 	_anchor(again, 0.5, 0.5, 0.5, 0.5, -210, 20, 210, 150)
-	again.pressed.connect(func():
-		in_game = true
-		get_tree().reload_current_scene())
+	again.pressed.connect(start_match)
 	_result.add_child(again)
 	var to_menu := _make_button("В МЕНЮ", Color(0.45, 0.42, 0.62), 40)
 	_anchor(to_menu, 0.5, 0.5, 0.5, 0.5, -170, 180, 170, 280)
-	to_menu.pressed.connect(func():
-		in_game = false
-		get_tree().reload_current_scene())
+	to_menu.pressed.connect(go_to_menu)
 	_result.add_child(to_menu)
 
 
@@ -486,7 +488,8 @@ func _update_ui() -> void:
 	elif player.carried > 0:
 		_info.text = "Кристаллов с собой: %d. Неси к синему знамени!" % player.carried
 	elif _hint_t > 0.0:
-		_info.text = "Собирай кристаллы в центре. В кустах тебя не видно!"
+		_info.text = ("Собирай кристаллы в центре. В кустах тебя не видно!" if mode == "charge"
+			else "Схватка! Одолей 10 вражеских рыцарей.")
 	else:
 		_info.text = ""
 	_super_btn.fill = player.super_charge
@@ -533,7 +536,7 @@ func _process(delta: float) -> void:
 		return
 
 	_battery_t -= delta
-	if _battery_t <= 0.0:
+	if mode == "charge" and _battery_t <= 0.0:
 		_battery_t = 3.0
 		if batteries.size() < MAX_BATTERIES:
 			var a := randf() * TAU
@@ -582,6 +585,8 @@ func _handle_pickups() -> void:
 		var st: Vector3 = stations[k.team]
 		if k.carried > 0 and Vector2(st.x - kp.x, st.z - kp.z).length() < 1.8:
 			fx_text(st + Vector3(0, 2.8, 0), "+%d" % k.carried, Color(0.45, 1, 0.65), 90)
+			if k.is_player:
+				note("crystals", k.carried)
 			score[k.team] += k.carried
 			k.carried = 0
 			sfx("score", null, 0.0 if k.team == player.team else -6.0)
@@ -598,11 +603,49 @@ func _end_game(winner: int) -> void:
 		await get_tree().create_timer(2.5).timeout
 		get_tree().reload_current_scene()
 		return
+	var win: bool = winner == player.team
+	var res := Profile.match_result(win, match_stats)
 	_result.visible = true
-	_result_label.text = "ПОБЕДА!" if winner == player.team else "ПОРАЖЕНИЕ"
+	_result_label.text = "ПОБЕДА!" if win else "ПОРАЖЕНИЕ"
 	_result_label.add_theme_color_override("font_color", team_colors[winner])
+	_show_rewards(res)
 	_music.volume_db = -26.0
-	sfx("win" if winner == player.team else "lose")
+	sfx("win" if win else "lose")
+
+
+## Строки наград на экране итога: кубки, монеты, выполненные задания.
+func _show_rewards(res: Dictionary) -> void:
+	var box := Control.new()
+	box.anchor_left = 0.5
+	box.anchor_right = 0.5
+	box.anchor_top = 0.35
+	box.anchor_bottom = 0.35
+	_result.add_child(box)
+	var rows := [["trophy", "%+d" % int(res.trophies), Color(1, 0.8, 0.3)],
+		["coin", "+%d" % int(res.coins), Color(1, 0.88, 0.45)]]
+	for i in rows.size():
+		var ic = IconScript.new()
+		ic.kind = rows[i][0]
+		ic.position = Vector2(-120, 80 + i * 70)
+		ic.size = Vector2(60, 60)
+		box.add_child(ic)
+		var l := _label(46, rows[i][2], rows[i][1])
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		l.position = Vector2(-48, 80 + i * 70)
+		l.size = Vector2(220, 60)
+		box.add_child(l)
+	var done := Profile.quests_ready_count()
+	if done > 0:
+		var q := _label(28, Color(0.6, 1, 0.6), "Заданий выполнено: %d — забери награду в меню!" % done)
+		q.position = Vector2(-340, 230)
+		q.size = Vector2(680, 50)
+		box.add_child(q)
+
+
+## Учёт действий игрока для заданий (только в настоящем матче).
+func note(stat: String, n := 1) -> void:
+	if in_game and not game_over:
+		match_stats[stat] = int(match_stats.get(stat, 0)) + n
 
 
 # ---------------------------------------------------------------- звук
@@ -685,7 +728,15 @@ func nearest_battery(pos: Vector3):
 	return best
 
 
-func on_knight_died(k) -> void:
+func on_knight_died(k, killer = null) -> void:
+	if killer != null and is_instance_valid(killer) and killer == player:
+		note("kos")
+	if mode == "brawl" and not game_over:
+		var t := 1 - int(k.team)
+		score[t] += 1
+		fx_text(stations[t] + Vector3(0, 2.8, 0), "+1", team_colors[t], 80)
+		if score[t] >= WIN_SCORE:
+			_end_game(t)
 	var count: int = k.carried
 	k.carried = 0
 	for i in count:
@@ -785,6 +836,8 @@ func fx_text(pos: Vector3, text: String, color: Color, size := 64) -> void:
 
 ## Тряска камеры; сильнее, если событие близко к игроку.
 func shake(amount: float, pos = null) -> void:
+	if not shake_on:
+		return
 	if pos != null and player:
 		amount *= clampf(1.0 - (pos as Vector3).distance_to(player.global_position) / 10.0, 0.0, 1.0)
 	_shake = maxf(_shake, amount)
@@ -823,119 +876,36 @@ func _make_button(text: String, color: Color, font_size := 44) -> Button:
 	return b
 
 
-func _bar(parent: Control, caption: String, value: int, y: float) -> void:
-	var l := _label(26, Color(0.9, 0.88, 1.0), caption)
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_anchor(l, 0, 0, 0, 0, 120, y, 260, y + 34)
-	parent.add_child(l)
-	for i in 5:
-		var seg := ColorRect.new()
-		seg.color = Color(1, 0.78, 0.25) if i < value else Color(0.25, 0.22, 0.32)
-		seg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_anchor(seg, 0, 0, 0, 0, 270 + i * 48, y + 6, 310 + i * 48, y + 28)
-		parent.add_child(seg)
-
-
 func _open_menu() -> void:
 	player.autopilot = true
 	_hud.visible = false
 	var layer := CanvasLayer.new()
 	layer.layer = 5
 	add_child(layer)
-	_menu = Control.new()
-	_anchor(_menu, 0, 0, 1, 1, 0, 0, 0, 0)
+	_menu = MenuScript.new()
+	_menu.main = self
 	layer.add_child(_menu)
 
-	# затемнение сверху и снизу, бой ботов виден посередине
-	for spec in [[0.0, 0.32, 0.75], [0.62, 1.0, 0.8]]:
-		var g := ColorRect.new()
-		g.color = Color(0.07, 0.06, 0.13, spec[2])
-		g.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_anchor(g, 0, spec[0], 1, spec[1], 0, 0, 0, 0)
-		_menu.add_child(g)
 
-	# название
-	var title := _label(118, Color(1.0, 0.8, 0.28), "РЖАВЫЕ\nРЫЦАРИ")
-	title.add_theme_constant_override("outline_size", 26)
-	title.add_theme_constant_override("line_spacing", -24)
-	_anchor(title, 0, 0, 1, 0, 0, 70, 0, 330)
-	title.pivot_offset = Vector2(360, 130)
-	_menu.add_child(title)
-	var tw := create_tween().set_loops()
-	tw.tween_property(title, "scale", Vector2(1.04, 1.04), 1.2).set_trans(Tween.TRANS_SINE)
-	tw.tween_property(title, "scale", Vector2.ONE, 1.2).set_trans(Tween.TRANS_SINE)
-	var sub := _label(32, Color(0.85, 0.85, 1.0), "Битва за кристаллы во дворе замка")
-	_anchor(sub, 0, 0, 1, 0, 0, 335, 0, 380)
-	_menu.add_child(sub)
+func start_match() -> void:
+	in_game = true
+	get_tree().reload_current_scene()
 
-	# карточка героя
-	var card := Panel.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.12, 0.1, 0.2, 0.92)
-	sb.set_corner_radius_all(24)
-	sb.set_border_width_all(5)
-	sb.border_color = Color(1.0, 0.78, 0.28)
-	card.add_theme_stylebox_override("panel", sb)
-	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_anchor(card, 0.5, 1, 0.5, 1, -320, -500, 320, -290)
-	_menu.add_child(card)
-	var hero := _label(40, Color.WHITE, "РЫЦАРЬ")
-	_anchor(hero, 0, 0, 1, 0, 0, 14, 0, 64)
-	card.add_child(hero)
-	_bar(card, "Здоровье", 4, 72)
-	_bar(card, "Урон", 3, 108)
-	_bar(card, "Скорость", 3, 144)
-	var sup := _label(24, Color(1.0, 0.85, 0.4), "Супер: «Веер клинков» — 7 волн разом")
-	_anchor(sup, 0, 0, 1, 0, 0, 176, 0, 206)
-	card.add_child(sup)
-	var soon := _label(22, Color(0.65, 0.62, 0.8), "Скоро: лучница, рыцарь с молотом, маг")
-	_anchor(soon, 0.5, 1, 0.5, 1, -320, -282, 320, -250)
-	_menu.add_child(soon)
 
-	# кнопки
-	var play := _make_button("ИГРАТЬ", Color(0.95, 0.52, 0.16), 70)
-	_anchor(play, 0.5, 1, 0.5, 1, -230, -235, 230, -100)
-	play.pressed.connect(func():
-		in_game = true
-		get_tree().reload_current_scene())
-	_menu.add_child(play)
-	var ptw := create_tween().set_loops()
-	play.pivot_offset = Vector2(230, 67)
-	ptw.tween_property(play, "scale", Vector2(1.05, 1.05), 0.6).set_trans(Tween.TRANS_SINE)
-	ptw.tween_property(play, "scale", Vector2.ONE, 0.6).set_trans(Tween.TRANS_SINE)
+func go_to_menu() -> void:
+	in_game = false
+	get_tree().reload_current_scene()
 
-	_sound_btn = _make_button("", Color(0.3, 0.3, 0.45), 28)
-	_anchor(_sound_btn, 0, 1, 0, 1, 24, -84, 254, -18)
-	_sound_btn.pressed.connect(func():
-		sound_on = not sound_on
-		_save_settings()
-		_refresh_toggles())
-	_menu.add_child(_sound_btn)
-	_music_btn = _make_button("", Color(0.3, 0.3, 0.45), 28)
-	_anchor(_music_btn, 1, 1, 1, 1, -254, -84, -24, -18)
-	_music_btn.pressed.connect(func():
-		music_on = not music_on
+
+## Применить настройки профиля (звук, музыка, тряска).
+func apply_settings() -> void:
+	var st: Dictionary = Profile.data.settings
+	sound_on = st.get("sound", true)
+	music_on = st.get("music", true)
+	shake_on = st.get("shake", true)
+	if _music:
 		_music.stream_paused = not music_on
-		_save_settings()
-		_refresh_toggles())
-	_menu.add_child(_music_btn)
-	_refresh_toggles()
-
-
-func _refresh_toggles() -> void:
-	_sound_btn.text = "Звук: " + ("ВКЛ" if sound_on else "ВЫКЛ")
-	_music_btn.text = "Музыка: " + ("ВКЛ" if music_on else "ВЫКЛ")
 
 
 func _load_settings() -> void:
-	var cf := ConfigFile.new()
-	if cf.load("user://settings.cfg") == OK:
-		sound_on = cf.get_value("audio", "sound", true)
-		music_on = cf.get_value("audio", "music", true)
-
-
-func _save_settings() -> void:
-	var cf := ConfigFile.new()
-	cf.set_value("audio", "sound", sound_on)
-	cf.set_value("audio", "music", music_on)
-	cf.save("user://settings.cfg")
+	apply_settings()
