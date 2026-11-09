@@ -53,6 +53,9 @@ var _mat_cache := {}
 var _tex := {}
 var _bush_mat: StandardMaterial3D
 var _bush_mat_seen: StandardMaterial3D
+var _sprite_mats: Array = []
+var _sprite_mats_seen: Array = []
+const BUSH_SPRITES := 6        # спрайтов в bushes.png (в ряд по 256x256)
 
 var _camera: Camera3D
 var _joystick
@@ -69,7 +72,7 @@ var _super_key := false
 
 func _ready() -> void:
 	randomize()
-	for tex_name in ["grass", "stone", "leaves"]:
+	for tex_name in ["grass", "stone", "leaves", "bushes"]:
 		_tex[tex_name] = load("res://%s.png" % tex_name)
 	_grid = MAP_TOP.duplicate()
 	for i in range(MAP_TOP.size() - 1, -1, -1):
@@ -135,6 +138,24 @@ func toon(color: Color, glow := false, outline := false) -> StandardMaterial3D:
 	return m
 
 
+## Материал куста-спрайта: кусочек атласа bushes.png, всегда смотрит в камеру.
+func _bush_sprite_mat(i: int, seen: bool) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = _tex["bushes"]
+	m.uv1_scale = Vector3(1.0 / BUSH_SPRITES, 1, 1)
+	m.uv1_offset = Vector3(float(i) / BUSH_SPRITES, 0, 0)
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	if seen:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.albedo_color = Color(1, 1, 1, 0.4)
+	else:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		m.alpha_scissor_threshold = 0.5
+	return m
+
+
 func _textured(tex_name: String, tint := Color.WHITE, uv := 1.0) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = _tex[tex_name]
@@ -190,7 +211,7 @@ func _disc(pos: Vector3, radius: float, mat: Material, h := 0.06) -> MeshInstanc
 func _build_world() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.16, 0.36, 0.22)
+	env.background_color = Color(0.13, 0.14, 0.24)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.9, 0.95, 1.0)
 	env.ambient_light_energy = 0.75
@@ -223,10 +244,11 @@ func _cell_pos(col: int, row: int) -> Vector3:
 
 func _build_arena() -> void:
 	# трава двора
-	_box(Vector3(0, -0.25, 0), Vector3(HALF_W * 2 + 8, 0.5, HALF_L * 2 + 8), _textured("grass", Color.WHITE, 0.5), false)
+	# пол: атлас 4x4 плитки = 4 м
+	_box(Vector3(0, -0.25, 0), Vector3(HALF_W * 2 + 8, 0.5, HALF_L * 2 + 8), _textured("grass", Color.WHITE, 0.25), false)
 
 	# живая изгородь по периметру (твёрдая)
-	var hedge := _textured("leaves", Color(0.62, 0.78, 0.6), 1.0)
+	var hedge := _textured("leaves", Color(0.75, 0.85, 0.75), 0.7)
 	var hh := 1.6
 	_box(Vector3(0, hh / 2, -HALF_L - 1), Vector3(HALF_W * 2 + 4, hh, 2), hedge)
 	_box(Vector3(0, hh / 2, HALF_L + 1), Vector3(HALF_W * 2 + 4, hh, 2), hedge)
@@ -234,12 +256,14 @@ func _build_arena() -> void:
 	_box(Vector3(HALF_W + 1, hh / 2, 0), Vector3(2, hh, HALF_L * 2), hedge)
 
 	# блоки и кусты по карте
-	var stone := _textured("stone", Color.WHITE, 1.0)
-	var cap := toon(Color(0.36, 0.7, 0.32))
-	_bush_mat = _textured("leaves", Color.WHITE, 1.0)
+	var stone := _textured("stone", Color.WHITE, 0.5)     # атлас 2x2 = 2 м
+	_bush_mat = _textured("leaves", Color(0.7, 0.8, 0.7), 1.0)
 	_bush_mat_seen = _bush_mat.duplicate() as StandardMaterial3D
 	_bush_mat_seen.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_bush_mat_seen.albedo_color = Color(1, 1, 1, 0.45)
+	_bush_mat_seen.albedo_color = Color(0.7, 0.8, 0.7, 0.4)
+	for i in BUSH_SPRITES:
+		_sprite_mats.append(_bush_sprite_mat(i, false))
+		_sprite_mats_seen.append(_bush_sprite_mat(i, true))
 	for row in _grid.size():
 		var line: String = _grid[row]
 		for col in line.length():
@@ -247,21 +271,19 @@ func _build_arena() -> void:
 			match line[col]:
 				"#":
 					_box(p + Vector3(0, 0.6, 0), Vector3(1, 1.2, 1), stone)
-					if (col * 7 + row * 3) % 5 == 0:       # мох на некоторых блоках
-						_box(p + Vector3(0, 1.23, 0), Vector3(0.7, 0.06, 0.7), cap, false)
 				"b":
-					var m := _box(p + Vector3(0, 0.55, 0), Vector3(1.02, 1.1, 1.02), _bush_mat, false)
-					for k in 3:                              # пушистый верх
-						var off := Vector3(randf_range(-0.3, 0.3), 1.1 + randf() * 0.1, randf_range(-0.3, 0.3))
-						var t := MeshInstance3D.new()
-						var sm := SphereMesh.new()
-						sm.radius = randf_range(0.28, 0.36)
-						sm.height = sm.radius * 1.5
-						t.mesh = sm
-						t.position = off
-						t.material_override = _bush_mat
-						m.add_child(t)
-					_bushes.append({"pos": p, "mesh": m})
+					# низкое основание из листвы + нарисованный куст-спрайт, повёрнутый к камере
+					var m := _box(p + Vector3(0, 0.15, 0), Vector3(0.98, 0.3, 0.98), _bush_mat, false)
+					var idx := (col * 7 + row * 13) % BUSH_SPRITES
+					var spr := MeshInstance3D.new()
+					var q := QuadMesh.new()
+					q.size = Vector2(1.45, 1.45)
+					spr.mesh = q
+					spr.position = Vector3(0, 0.55, 0)
+					spr.material_override = _sprite_mats[idx]
+					spr.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+					m.add_child(spr)
+					_bushes.append({"pos": p, "mesh": m, "sprite": spr, "idx": idx})
 
 	# центр, где появляются кристаллы
 	_disc(Vector3.ZERO, 2.3, toon(Color(0.86, 0.76, 0.5)))
@@ -463,8 +485,7 @@ func _process(delta: float) -> void:
 	for bush in _bushes:
 		var near: bool = player.alive and player.in_bush and (bush.pos as Vector3).distance_to(pp) < 2.2
 		bush.mesh.material_override = _bush_mat_seen if near else _bush_mat
-		for c in bush.mesh.get_children():
-			c.material_override = bush.mesh.material_override
+		bush.sprite.material_override = _sprite_mats_seen[bush.idx] if near else _sprite_mats[bush.idx]
 
 	# враги в кустах скрыты от игрока
 	for k in knights:
