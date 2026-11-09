@@ -26,6 +26,7 @@ var _aim_hold := 0.0
 var _since_hit := 10.0
 var _respawn_t := 0.0
 var _walk_t := 0.0
+var _dust_t := 0.0
 var _strafe := 1.0
 var _strafe_t := 0.0
 var _stuck_t := 0.0
@@ -293,6 +294,12 @@ func _physics_process(delta: float) -> void:
 		facing = move_dir.normalized()
 	_visual.rotation.y = lerp_angle(_visual.rotation.y, atan2(facing.x, facing.z), minf(1.0, delta * 14.0))
 	_animate(delta)
+	# пыль из-под ног (в кустах не пылим, чтобы не выдавать засаду)
+	if move_dir != Vector3.ZERO and not in_bush:
+		_dust_t -= delta
+		if _dust_t <= 0.0:
+			_dust_t = 0.22
+			main.fx_burst(global_position + Vector3(0, 0.05, 0), Color(0.82, 0.82, 0.95, 0.7), 3, 0.9, 0.1, 0.35, 0.6)
 
 	_hp_fill.scale.x = maxf(0.001, hp / max_hp)
 	_hp_fill.position.x = 0.0
@@ -365,6 +372,10 @@ func try_super(aim: Vector3) -> bool:
 		var a := deg_to_rad(-30.0 + i * 10.0)
 		_spawn_wave(facing.rotated(Vector3.UP, a), 28.0, 0.75)
 	main.sfx("super", global_position)
+	main.fx_ring(global_position, main.team_colors[team], 3.4, 0.4)
+	main.fx_burst(global_position + Vector3(0, 0.9, 0), Color(1, 0.9, 0.5), 18, 6.0, 0.07, 0.45, -4.0)
+	if is_player:
+		main.shake(0.3)
 	return true
 
 
@@ -381,6 +392,11 @@ func take_damage(amount: float, _attacker) -> void:
 	hp -= amount
 	_since_hit = 0.0
 	main.sfx("hit", global_position, 0.0 if is_player else -2.0)
+	main.fx_burst(global_position + Vector3(0, 1.0, 0), Color(1, 0.85, 0.4), 10, 4.0, 0.06, 0.35)
+	main.fx_text(global_position + Vector3(0, 2.3, 0), "-%d" % int(amount),
+		Color(1, 0.35, 0.3) if is_player else Color(1, 1, 1))
+	if is_player:
+		main.shake(0.35)
 	reveal_t = maxf(reveal_t, 0.6)
 	var tw := create_tween()
 	tw.tween_property(_visual, "scale", Vector3.ONE, 0.15).from(Vector3(1.2, 0.85, 1.2))
@@ -394,6 +410,11 @@ func _die() -> void:
 	collision_layer = 0
 	_respawn_t = 3.0
 	main.sfx("death", global_position)
+	# доспехи разлетаются: сталь и ткань цвета команды
+	main.fx_burst(global_position + Vector3(0, 0.9, 0), Color(0.62, 0.64, 0.7), 12, 6.0, 0.16, 1.1, -14.0)
+	main.fx_burst(global_position + Vector3(0, 0.8, 0), (main.team_colors[team] as Color).darkened(0.3), 8, 4.5, 0.14, 1.0, -12.0)
+	main.fx_ring(global_position, Color(0.8, 0.8, 0.9), 2.0, 0.5)
+	main.shake(0.6, global_position)
 	main.on_knight_died(self)
 
 
@@ -404,6 +425,8 @@ func _respawn() -> void:
 	visible = true
 	collision_layer = 2
 	_visual.scale = Vector3.ONE
+	main.fx_ring(spawn_pos, main.team_colors[team], 1.8, 0.5)
+	main.fx_burst(spawn_pos + Vector3(0, 0.3, 0), (main.team_colors[team] as Color).lightened(0.5), 14, 3.0, 0.06, 0.7, 3.0)
 	if is_player:
 		main.sfx("respawn")
 

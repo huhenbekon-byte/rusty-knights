@@ -43,6 +43,7 @@ func _physics_process(delta: float) -> void:
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if not hit.is_empty():
 		main.sfx("wall", global_position, -7.0)
+		main.fx_burst(global_position, Color(0.6, 0.55, 0.9), 6, 2.5, 0.07, 0.35)
 		queue_free()
 		return
 	global_position = to

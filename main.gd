@@ -75,6 +75,15 @@ var _battery_t := 1.0
 var _hint_t := 6.0
 var _super_key := false
 
+static var in_game := false    # false — показываем меню, на фоне дерутся боты
+var sound_on := true
+var music_on := true
+var _shake := 0.0
+var _hud: Control
+var _menu: Control
+var _sound_btn: Button
+var _music_btn: Button
+
 
 func _ready() -> void:
 	randomize()
@@ -87,33 +96,42 @@ func _ready() -> void:
 		for j in range(src.length() - 1, -1, -1):
 			rev += src[j]
 		_grid.append(rev)
+	_load_settings()
 	_build_world()
 	_build_arena()
 	_spawn_knights()
 	_build_ui()
 	_setup_audio()
-	_setup_screenshots()
+	var shots := _shots_dir()
+	if shots != "":
+		_setup_screenshots(shots)
+	elif not in_game:
+		_open_menu()
+
+
+func _shots_dir() -> String:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--shots="):
+			return a.substr(8)
+	return ""
 
 
 ## Режим автоскриншотов: godot --path . -- --shots=/путь/к/папке
-## Игрок управляется ботом, игра снимает 3 кадра и закрывается.
-func _setup_screenshots() -> void:
-	var dir := ""
-	for a in OS.get_cmdline_user_args():
-		if a.begins_with("--shots="):
-			dir = a.substr(8)
-	if dir == "":
-		return
+## Кадр 1 — главное меню, кадры 2–3 — бой (игрок под управлением бота).
+func _setup_screenshots(dir: String) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
-	player.autopilot = true
-	_hint_t = 0.0
-	var times := [5.0, 11.0, 18.0]
+	_open_menu()
+	var times := [3.0, 9.0, 16.0]
 	for i in times.size():
 		await get_tree().create_timer(times[i] - (times[i - 1] if i > 0 else 0.0)).timeout
 		await RenderingServer.frame_post_draw
 		var img := get_viewport().get_texture().get_image()
 		img.save_png("%s/shot_%d.png" % [dir, i + 1])
 		print("saved shot ", i + 1)
+		if i == 0:
+			_menu.visible = false
+			_hud.visible = true
+			_hint_t = 0.0
 	get_tree().quit()
 
 
@@ -403,6 +421,7 @@ func _build_ui() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_anchor(root, 0, 0, 1, 1, 0, 0, 0, 0)
 	layer.add_child(root)
+	_hud = root
 
 	_score_bar = ScoreBarScript.new()
 	_score_bar.colors = team_colors
@@ -442,14 +461,19 @@ func _build_ui() -> void:
 	_result_label = _label(84, Color.WHITE)
 	_anchor(_result_label, 0, 0.35, 1, 0.35, 0, -70, 0, 70)
 	_result.add_child(_result_label)
-	var again = TouchButtonScript.new()
-	again.label_text = "ЕЩЁ РАЗ"
-	again.color = Color(0.3, 0.8, 0.4)
-	_anchor(again, 0.5, 0.5, 0.5, 0.5, -120, 0, 120, 240)
+	_result.mouse_filter = Control.MOUSE_FILTER_STOP
+	var again := _make_button("ЕЩЁ РАЗ", Color(0.3, 0.75, 0.35), 52)
+	_anchor(again, 0.5, 0.5, 0.5, 0.5, -210, 20, 210, 150)
 	again.pressed.connect(func():
-		sfx("click")
+		in_game = true
 		get_tree().reload_current_scene())
 	_result.add_child(again)
+	var to_menu := _make_button("В МЕНЮ", Color(0.45, 0.42, 0.62), 40)
+	_anchor(to_menu, 0.5, 0.5, 0.5, 0.5, -170, 180, 170, 280)
+	to_menu.pressed.connect(func():
+		in_game = false
+		get_tree().reload_current_scene())
+	_result.add_child(to_menu)
 
 
 func _update_ui() -> void:
@@ -484,6 +508,9 @@ func _process(delta: float) -> void:
 	var cam_target := target + CAM_OFFSET
 	cam_target.x = clampf(cam_target.x, -7.0, 7.0)
 	_camera.position = _camera.position.lerp(cam_target, clampf(delta * 5.0, 0.0, 1.0))
+	if _shake > 0.0:                                 # тряска камеры
+		_camera.position += Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)) * _shake * 0.35
+		_shake = maxf(0.0, _shake - delta * 2.5)
 
 	for b in batteries:
 		b.rotation.y += delta * 2.5
@@ -551,11 +578,15 @@ func _handle_pickups() -> void:
 				batteries.remove_at(i)
 				b.queue_free()
 				sfx("pickup", kp, 0.0 if k.is_player else -5.0)
+				fx_burst(b.position, Color(0.4, 1.0, 0.6), 10, 2.5, 0.06, 0.5, 2.0)
 		var st: Vector3 = stations[k.team]
 		if k.carried > 0 and Vector2(st.x - kp.x, st.z - kp.z).length() < 1.8:
+			fx_text(st + Vector3(0, 2.8, 0), "+%d" % k.carried, Color(0.45, 1, 0.65), 90)
 			score[k.team] += k.carried
 			k.carried = 0
 			sfx("score", null, 0.0 if k.team == player.team else -6.0)
+			fx_ring(st, team_colors[k.team], 3.0, 0.6)
+			fx_burst(st + Vector3(0, 0.3, 0), (team_colors[k.team] as Color).lightened(0.4), 24, 5.0, 0.08, 0.8, -6.0)
 			if score[k.team] >= WIN_SCORE:
 				_end_game(k.team)
 				return
@@ -563,6 +594,10 @@ func _handle_pickups() -> void:
 
 func _end_game(winner: int) -> void:
 	game_over = true
+	if not in_game:                 # бой ботов за меню — просто начинаем заново
+		await get_tree().create_timer(2.5).timeout
+		get_tree().reload_current_scene()
+		return
 	_result.visible = true
 	_result_label.text = "ПОБЕДА!" if winner == player.team else "ПОРАЖЕНИЕ"
 	_result_label.add_theme_color_override("font_color", team_colors[winner])
@@ -585,12 +620,15 @@ func _setup_audio() -> void:
 	add_child(_music)
 	_music.finished.connect(func(): _music.play())   # музыка по кругу
 	_music.play()
+	_music.stream_paused = not music_on
 
 
 ## Проиграть звук. pos — где он прозвучал (дальше от игрока — тише), null — без затухания.
 func sfx(sound: String, pos = null, volume := 0.0) -> void:
-	if not _sfx.has(sound):
+	if not _sfx.has(sound) or not sound_on:
 		return
+	if not in_game and _menu and _menu.visible and sound != "click":
+		volume -= 9.0                                 # бой за меню звучит тише
 	if pos != null and player:
 		var d: float = (pos as Vector3).distance_to(player.global_position)
 		if d > 16.0:
@@ -655,3 +693,249 @@ func on_knight_died(k) -> void:
 		p.x = clampf(p.x, -HALF_W + 0.8, HALF_W - 0.8)
 		p.z = clampf(p.z, -HALF_L + 0.8, HALF_L - 0.8)
 		_spawn_battery(p)
+
+
+# ---------------------------------------------------------------- эффекты
+
+var _fx_mats := {}
+
+
+func _fx_mat(color: Color) -> StandardMaterial3D:
+	var key := color.to_html()
+	if not _fx_mats.has(key):
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.vertex_color_use_as_albedo = true
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_fx_mats[key] = m
+	return _fx_mats[key]
+
+
+## Взрыв частиц: искры, обломки, пыль. gravity < 0 — падают, > 0 — всплывают.
+func fx_burst(pos: Vector3, color: Color, amount := 12, speed := 4.0, size := 0.08,
+		life := 0.5, gravity := -9.0) -> void:
+	var p := CPUParticles3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(size, size, size)
+	mesh.material = _fx_mat(color)
+	p.mesh = mesh
+	p.amount = amount
+	p.lifetime = life
+	p.one_shot = true
+	p.explosiveness = 1.0
+	p.direction = Vector3.UP
+	p.spread = 80.0
+	p.initial_velocity_min = speed * 0.5
+	p.initial_velocity_max = speed
+	p.gravity = Vector3(0, gravity, 0)
+	p.angular_velocity_min = -360.0
+	p.angular_velocity_max = 360.0
+	p.scale_amount_min = 0.6
+	p.scale_amount_max = 1.3
+	var curve := Curve.new()
+	curve.add_point(Vector2(0, 1))
+	curve.add_point(Vector2(1, 0))
+	p.scale_amount_curve = curve
+	p.color = color
+	p.position = pos
+	add_child(p)
+	p.emitting = true
+	get_tree().create_timer(life + 0.3).timeout.connect(p.queue_free)
+
+
+## Расходящееся кольцо по земле (супер, сдача кристаллов, возрождение).
+func fx_ring(pos: Vector3, color: Color, radius := 2.5, time := 0.45) -> void:
+	var mi := MeshInstance3D.new()
+	var t := TorusMesh.new()
+	t.inner_radius = 0.85
+	t.outer_radius = 1.0
+	t.rings = 32
+	mi.mesh = t
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = color.lightened(0.3)
+	mi.material_override = m
+	mi.position = Vector3(pos.x, 0.08, pos.z)
+	mi.scale = Vector3(0.2, 0.05, 0.2)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(mi, "scale", Vector3(radius, 0.05, radius), time).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tw.tween_property(m, "albedo_color:a", 0.0, time)
+	tw.chain().tween_callback(mi.queue_free)
+
+
+## Всплывающий текст над головой (урон, очки).
+func fx_text(pos: Vector3, text: String, color: Color, size := 64) -> void:
+	var l := Label3D.new()
+	l.text = text
+	l.font_size = size
+	l.outline_size = 14
+	l.modulate = color
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.no_depth_test = true
+	l.position = pos + Vector3(randf_range(-0.25, 0.25), 0, 0)
+	add_child(l)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(l, "position:y", pos.y + 1.0, 0.7).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "modulate:a", 0.0, 0.7).set_delay(0.25)
+	tw.chain().tween_callback(l.queue_free)
+
+
+## Тряска камеры; сильнее, если событие близко к игроку.
+func shake(amount: float, pos = null) -> void:
+	if pos != null and player:
+		amount *= clampf(1.0 - (pos as Vector3).distance_to(player.global_position) / 10.0, 0.0, 1.0)
+	_shake = maxf(_shake, amount)
+
+
+# ---------------------------------------------------------------- меню
+
+func _make_button(text: String, color: Color, font_size := 44) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", font_size)
+	b.add_theme_color_override("font_color", Color.WHITE)
+	b.add_theme_color_override("font_pressed_color", Color(1, 1, 0.85))
+	b.add_theme_color_override("font_hover_color", Color.WHITE)
+	b.add_theme_color_override("font_outline_color", Color(0.1, 0.07, 0.1))
+	b.add_theme_constant_override("outline_size", 10)
+	for state in ["normal", "hover", "pressed"]:
+		var sb := StyleBoxFlat.new()
+		var c := color
+		if state == "hover":
+			c = color.lightened(0.1)
+		elif state == "pressed":
+			c = color.darkened(0.15)
+		sb.bg_color = c
+		sb.set_corner_radius_all(26)
+		sb.set_border_width_all(6)
+		sb.border_color = Color(0.1, 0.07, 0.1)
+		sb.shadow_color = Color(0, 0, 0, 0.45)
+		sb.shadow_size = 0 if state == "pressed" else 8
+		sb.shadow_offset = Vector2(0, 6)
+		if state == "pressed":
+			sb.content_margin_top = 6
+		b.add_theme_stylebox_override(state, sb)
+	b.pressed.connect(func(): sfx("click"))
+	return b
+
+
+func _bar(parent: Control, caption: String, value: int, y: float) -> void:
+	var l := _label(26, Color(0.9, 0.88, 1.0), caption)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_anchor(l, 0, 0, 0, 0, 120, y, 260, y + 34)
+	parent.add_child(l)
+	for i in 5:
+		var seg := ColorRect.new()
+		seg.color = Color(1, 0.78, 0.25) if i < value else Color(0.25, 0.22, 0.32)
+		seg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_anchor(seg, 0, 0, 0, 0, 270 + i * 48, y + 6, 310 + i * 48, y + 28)
+		parent.add_child(seg)
+
+
+func _open_menu() -> void:
+	player.autopilot = true
+	_hud.visible = false
+	var layer := CanvasLayer.new()
+	layer.layer = 5
+	add_child(layer)
+	_menu = Control.new()
+	_anchor(_menu, 0, 0, 1, 1, 0, 0, 0, 0)
+	layer.add_child(_menu)
+
+	# затемнение сверху и снизу, бой ботов виден посередине
+	for spec in [[0.0, 0.32, 0.75], [0.62, 1.0, 0.8]]:
+		var g := ColorRect.new()
+		g.color = Color(0.07, 0.06, 0.13, spec[2])
+		g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_anchor(g, 0, spec[0], 1, spec[1], 0, 0, 0, 0)
+		_menu.add_child(g)
+
+	# название
+	var title := _label(118, Color(1.0, 0.8, 0.28), "РЖАВЫЕ\nРЫЦАРИ")
+	title.add_theme_constant_override("outline_size", 26)
+	title.add_theme_constant_override("line_spacing", -24)
+	_anchor(title, 0, 0, 1, 0, 0, 70, 0, 330)
+	title.pivot_offset = Vector2(360, 130)
+	_menu.add_child(title)
+	var tw := create_tween().set_loops()
+	tw.tween_property(title, "scale", Vector2(1.04, 1.04), 1.2).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(title, "scale", Vector2.ONE, 1.2).set_trans(Tween.TRANS_SINE)
+	var sub := _label(32, Color(0.85, 0.85, 1.0), "Битва за кристаллы во дворе замка")
+	_anchor(sub, 0, 0, 1, 0, 0, 335, 0, 380)
+	_menu.add_child(sub)
+
+	# карточка героя
+	var card := Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.12, 0.1, 0.2, 0.92)
+	sb.set_corner_radius_all(24)
+	sb.set_border_width_all(5)
+	sb.border_color = Color(1.0, 0.78, 0.28)
+	card.add_theme_stylebox_override("panel", sb)
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor(card, 0.5, 1, 0.5, 1, -320, -500, 320, -290)
+	_menu.add_child(card)
+	var hero := _label(40, Color.WHITE, "РЫЦАРЬ")
+	_anchor(hero, 0, 0, 1, 0, 0, 14, 0, 64)
+	card.add_child(hero)
+	_bar(card, "Здоровье", 4, 72)
+	_bar(card, "Урон", 3, 108)
+	_bar(card, "Скорость", 3, 144)
+	var sup := _label(24, Color(1.0, 0.85, 0.4), "Супер: «Веер клинков» — 7 волн разом")
+	_anchor(sup, 0, 0, 1, 0, 0, 176, 0, 206)
+	card.add_child(sup)
+	var soon := _label(22, Color(0.65, 0.62, 0.8), "Скоро: лучница, рыцарь с молотом, маг")
+	_anchor(soon, 0.5, 1, 0.5, 1, -320, -282, 320, -250)
+	_menu.add_child(soon)
+
+	# кнопки
+	var play := _make_button("ИГРАТЬ", Color(0.95, 0.52, 0.16), 70)
+	_anchor(play, 0.5, 1, 0.5, 1, -230, -235, 230, -100)
+	play.pressed.connect(func():
+		in_game = true
+		get_tree().reload_current_scene())
+	_menu.add_child(play)
+	var ptw := create_tween().set_loops()
+	play.pivot_offset = Vector2(230, 67)
+	ptw.tween_property(play, "scale", Vector2(1.05, 1.05), 0.6).set_trans(Tween.TRANS_SINE)
+	ptw.tween_property(play, "scale", Vector2.ONE, 0.6).set_trans(Tween.TRANS_SINE)
+
+	_sound_btn = _make_button("", Color(0.3, 0.3, 0.45), 28)
+	_anchor(_sound_btn, 0, 1, 0, 1, 24, -84, 254, -18)
+	_sound_btn.pressed.connect(func():
+		sound_on = not sound_on
+		_save_settings()
+		_refresh_toggles())
+	_menu.add_child(_sound_btn)
+	_music_btn = _make_button("", Color(0.3, 0.3, 0.45), 28)
+	_anchor(_music_btn, 1, 1, 1, 1, -254, -84, -24, -18)
+	_music_btn.pressed.connect(func():
+		music_on = not music_on
+		_music.stream_paused = not music_on
+		_save_settings()
+		_refresh_toggles())
+	_menu.add_child(_music_btn)
+	_refresh_toggles()
+
+
+func _refresh_toggles() -> void:
+	_sound_btn.text = "Звук: " + ("ВКЛ" if sound_on else "ВЫКЛ")
+	_music_btn.text = "Музыка: " + ("ВКЛ" if music_on else "ВЫКЛ")
+
+
+func _load_settings() -> void:
+	var cf := ConfigFile.new()
+	if cf.load("user://settings.cfg") == OK:
+		sound_on = cf.get_value("audio", "sound", true)
+		music_on = cf.get_value("audio", "music", true)
+
+
+func _save_settings() -> void:
+	var cf := ConfigFile.new()
+	cf.set_value("audio", "sound", sound_on)
+	cf.set_value("audio", "music", music_on)
+	cf.save("user://settings.cfg")
