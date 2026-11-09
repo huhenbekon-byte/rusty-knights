@@ -277,7 +277,10 @@ func _build_arena() -> void:
 	# трава двора
 	# пол: атлас 4x4 плитки = 4 м
 	# пол: плитка песчаника (картинка 3:2 ≈ 6 x 4 м), шире арены — под декорациями тоже пол
-	var floor_mat := _textured("floor", Color.WHITE, 1.0)
+	# светлая плитка под ярким светом выгорает в белый — приглушаем, чтобы цвет был как на картинке
+	var floor_mat := _textured("floor", Color(0.6, 0.58, 0.58), 1.0)
+	if _tex["floor"] == null:
+		push_warning("floor.png не найден — загрузи его в репозиторий")
 	floor_mat.uv1_scale = Vector3(1.0 / 6.0, 1.0 / 6.0, 1.0 / 4.0)
 	_box(Vector3(0, -0.25, 0), Vector3(HALF_W * 2 + 24, 0.5, HALF_L * 2 + 20), floor_mat, false)
 
