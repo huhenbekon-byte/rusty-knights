@@ -1,0 +1,107 @@
+name: Сборка APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Скачать Godot и шаблоны экспорта
+        run: |
+          BASE=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          wget -q $BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          wget -q $BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 $RUNNER_TEMP/godot
+          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz -d $RUNNER_TEMP/tpl
+          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mv $RUNNER_TEMP/tpl/templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+          rm -f *.zip *.tpz
+
+      - name: Отладочный ключ и настройки Android
+        run: |
+          keytool -genkeypair -v -keystore $RUNNER_TEMP/debug.keystore \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          mkdir -p ~/.config/godot
+          for f in editor_settings-4.tres editor_settings-${GODOT_VERSION}.tres; do
+          cat > ~/.config/godot/$f <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$RUNNER_TEMP/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+          done
+
+      - name: Импорт ресурсов
+        run: timeout 300 $RUNNER_TEMP/godot --headless --path . --import || true
+
+      - name: Экспорт APK
+        env:
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ runner.temp }}/debug.keystore
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
+        run: |
+          mkdir -p build
+          $RUNNER_TEMP/godot --headless --path . --export-debug "Android" build/rusty-knights.apk
+          ls -la build
+          test -f build/rusty-knights.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rusty-knights-apk
+          path: build/rusty-knights.apk
+
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Виртуальный экран и программный OpenGL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libgl1-mesa-dri libglx-mesa0 mesa-utils > /dev/null
+
+      - name: Скачать Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 $RUNNER_TEMP/godot
+          rm -f *.zip
+
+      - name: Импорт ресурсов
+        run: timeout 300 $RUNNER_TEMP/godot --headless --path . --import || true
+
+      - name: Запустить игру и снять кадры
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          mkdir -p shots
+          timeout 120 xvfb-run -s "-screen 0 720x1280x24" \
+            $RUNNER_TEMP/godot --path . --rendering-driver opengl3 --resolution 720x1280 \
+            -- --shots=$GITHUB_WORKSPACE/shots || true
+          ls -la shots
+          test -f shots/shot_1.png
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: shots/*.png
