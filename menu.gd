@@ -638,33 +638,156 @@ func _page_shop(col: Control) -> void:
 			_toast("Не хватает кристаллов"))
 
 
+## Лучи света за открытым сундуком.
+class Rays extends Control:
+	var color := Color(1, 0.93, 0.6, 0.28)
+	func _draw() -> void:
+		var c := size * 0.5
+		var r := size.x * 0.5
+		for i in 12:
+			var a := i * TAU / 12.0
+			draw_colored_polygon(PackedVector2Array([c, c + Vector2(cos(a - 0.12), sin(a - 0.12)) * r,
+				c + Vector2(cos(a + 0.12), sin(a + 0.12)) * r]), color)
+
+
+var _chest_fast := false   # тап по окну — ускорить анимацию
+
+
+func _wait(sec: float) -> void:
+	await get_tree().create_timer(sec * (0.25 if _chest_fast else 1.0)).timeout
+
+
 func _buy_chest(kind: String) -> void:
 	var r := Profile.open_chest(kind)
 	if r.is_empty():
 		_toast("Пока нельзя" if kind == "wood" else "Не хватает " + ("монет" if kind == "iron" else "кристаллов"))
 		return
-	main.sfx("ready")
+	_chest_fast = false
 	var tints := {"wood": Color(0.62, 0.38, 0.18), "iron": Color(0.5, 0.53, 0.62), "royal": Color(0.48, 0.22, 0.62)}
-	var box := _popup(Profile.CHESTS[kind].name, 560)
-	var chest := _icon(box, "chest", Rect2(180, 90, 200, 200), tints[kind])
-	chest.pivot_offset = Vector2(100, 100)
+	var box := _popup(Profile.CHESTS[kind].name, 620)
+	var tap := Button.new()                       # невидимая кнопка на всё окно: тап ускоряет
+	tap.flat = true
+	tap.focus_mode = Control.FOCUS_NONE
+	tap.position = Vector2(0, 40)
+	tap.size = Vector2(560, 560)
+	tap.pressed.connect(func(): _chest_fast = true)
+	box.add_child(tap)
+
+	var rays := Rays.new()
+	rays.position = Vector2(80, 30)
+	rays.size = Vector2(400, 400)
+	rays.pivot_offset = Vector2(200, 200)
+	rays.modulate.a = 0.0
+	rays.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(rays)
+
+	var chest := _icon(box, "chest", Rect2(180, 130, 200, 200), tints[kind])
+	chest.pivot_offset = Vector2(100, 130)
 	chest.scale = Vector2(0.2, 0.2)
+	var hint := _lbl(box, "Открываем...", 26, Color(0.85, 0.85, 1.0), Rect2(0, 350, 560, 40))
+
+	# 1) сундук влетает
 	var tw := create_tween()
-	tw.tween_property(chest, "scale", Vector2(1.15, 1.15), 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(chest, "scale", Vector2.ONE, 0.15)
-	var y := 300.0
+	tw.tween_property(chest, "scale", Vector2(1.1, 1.1), 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(chest, "scale", Vector2.ONE, 0.12)
+	await _wait(0.5)
+	# 2) трясётся всё сильнее
+	for i in 3:
+		if not is_instance_valid(chest):
+			return
+		main.sfx("click")
+		var amp := 0.08 + i * 0.07
+		var sh := create_tween()
+		for j in 4:
+			sh.tween_property(chest, "rotation", amp * (1 if j % 2 == 0 else -1), 0.05)
+		sh.tween_property(chest, "rotation", 0.0, 0.05)
+		sh.parallel().tween_property(chest, "scale", Vector2(1.0 + i * 0.06, 1.0 - i * 0.04), 0.1)
+		await _wait(0.42)
+	if not is_instance_valid(chest):
+		return
+	# 3) вспышка, лучи, искры, сундук подпрыгивает
+	main.sfx("chest")
+	hint.text = ""
+	var flash := ColorRect.new()
+	flash.color = Color(1, 0.95, 0.8, 0.9)
+	flash.position = Vector2(0, 0)
+	flash.size = box.size
+	flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(flash)
+	create_tween().tween_property(flash, "modulate:a", 0.0, 0.45)
+	var op := create_tween()
+	op.tween_property(chest, "scale", Vector2(1.25, 0.8), 0.08)
+	op.tween_property(chest, "scale", Vector2(0.9, 1.2), 0.1)
+	op.tween_property(chest, "scale", Vector2(0.8, 0.8), 0.18).set_trans(Tween.TRANS_BACK)
+	op.parallel().tween_property(chest, "position:y", 60.0, 0.25)
+	rays.modulate.a = 1.0
+	var rt := create_tween().set_loops()
+	rt.tween_property(rays, "rotation", TAU, 8.0).from(0.0)
+	rays.tree_exiting.connect(rt.kill)
+	var sp := CPUParticles2D.new()
+	sp.position = Vector2(280, 230)
+	sp.amount = 46
+	sp.one_shot = true
+	sp.explosiveness = 0.95
+	sp.lifetime = 1.1
+	sp.spread = 180.0
+	sp.direction = Vector2(0, -1)
+	sp.initial_velocity_min = 220.0
+	sp.initial_velocity_max = 520.0
+	sp.gravity = Vector2(0, 700)
+	sp.scale_amount_min = 4.0
+	sp.scale_amount_max = 9.0
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 0.95, 0.6))
+	g.set_color(1, Color(1, 0.6, 0.2, 0))
+	sp.color_ramp = g
+	box.add_child(sp)
+	sp.emitting = true
+	await _wait(0.5)
+
+	# 4) награды вылетают по одной, цифры бегут вверх
+	var rows := []
 	if int(r.coins) > 0:
-		_icon(box, "coin", Rect2(170, y, 56, 56))
-		_lbl(box, "+%d" % int(r.coins), 40, GOLD, Rect2(236, y, 200, 56), HORIZONTAL_ALIGNMENT_LEFT)
-		y += 64
+		rows.append(["coin", int(r.coins), GOLD])
 	if int(r.gems) > 0:
-		_icon(box, "gem", Rect2(170, y, 56, 56))
-		_lbl(box, "+%d" % int(r.gems), 40, Color(0.6, 0.9, 1.0), Rect2(236, y, 200, 56), HORIZONTAL_ALIGNMENT_LEFT)
-		y += 64
-	if str(r.skin) != "":
+		rows.append(["gem", int(r.gems), Color(0.6, 0.9, 1.0)])
+	var y := 360.0
+	for row in rows:
+		if not is_instance_valid(box):
+			return
+		var ic := _icon(box, row[0], Rect2(250, 230, 60, 60))
+		ic.pivot_offset = Vector2(30, 30)
+		var lb := _lbl(box, "+0", 42, row[2], Rect2(246, y, 220, 60), HORIZONTAL_ALIGNMENT_LEFT)
+		lb.modulate.a = 0.0
+		var fl := create_tween()
+		fl.tween_property(ic, "position", Vector2(170, y), 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		fl.parallel().tween_property(ic, "scale", Vector2(1.3, 1.3), 0.16)
+		fl.tween_property(ic, "scale", Vector2.ONE, 0.12)
+		fl.parallel().tween_property(lb, "modulate:a", 1.0, 0.12)
+		main.sfx("reward")
+		var target: int = row[1]
+		var ct := create_tween()
+		ct.tween_method(func(v: float):
+			if is_instance_valid(lb):
+				lb.text = "+%d" % int(v), 0.0, float(target), 0.5 * (0.3 if _chest_fast else 1.0)).set_delay(0.2)
+		y += 70
+		await _wait(0.6)
+	if str(r.skin) != "" and is_instance_valid(box):
 		var hn := str(Profile.HEROES[r.skin_hero].name)
-		_lbl(box, "Новый облик: %s (%s)!" % [Profile.skin_def(r.skin_hero, r.skin).name, hn], 24, Color(0.6, 1, 0.6), Rect2(0, y, 560, 50))
-	var ok := _btn(box, "ЗАБРАТЬ", Color(0.3, 0.7, 0.35), Rect2(150, box.size.y - 100, 260, 76), 34)
+		var card := _panel(box, Rect2(40, y, 480, 64), Color(0.2, 0.42, 0.25), GOLD, 4)
+		card.pivot_offset = Vector2(240, 32)
+		card.scale = Vector2(0.3, 0.3)
+		_lbl(card, "Новый облик: %s (%s)!" % [Profile.skin_def(r.skin_hero, r.skin).name, hn], 24, Color(0.85, 1, 0.85), Rect2(0, 0, 480, 64))
+		create_tween().tween_property(card, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		main.sfx("ready")
+		await _wait(0.5)
+	if not is_instance_valid(box):
+		return
+	tap.queue_free()
+	var ok := _btn(box, "ЗАБРАТЬ", Color(0.3, 0.7, 0.35), Rect2(150, box.size.y - 96, 260, 76), 34)
+	ok.pivot_offset = Vector2(130, 38)
+	ok.scale = Vector2(0.5, 0.5)
+	create_tween().tween_property(ok, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	ok.pressed.connect(func():
 		_close_popup()
 		show_page(page))
@@ -816,7 +939,7 @@ func _open_settings() -> void:
 			_close_popup()
 			show_page("home"))
 		no.pressed.connect(_close_popup))
-	_lbl(box, "Ржавые Рыцари · версия 0.9 альфа", 20, Color(0.6, 0.6, 0.8), Rect2(0, 550, 560, 40))
+	_lbl(box, "Ржавые Рыцари · версия 0.8", 20, Color(0.6, 0.6, 0.8), Rect2(0, 550, 560, 40))
 
 
 func _open_profile() -> void:

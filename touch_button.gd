@@ -4,6 +4,7 @@ extends Control
 ## Работает одновременно с джойстиком (мультитач).
 
 signal pressed
+signal released(drag: Vector2, held: float)   # отпустили: куда тянули и сколько держали
 
 var frame: Texture2D
 var icon_tex: Texture2D
@@ -13,6 +14,9 @@ var fill := 1.0          # заполнение кольца (заряд, пер
 var enabled := true
 var _touch := -1
 var _press_t := 0.0
+var drag := Vector2.ZERO   # насколько палец утянут от точки нажатия (прицел)
+var held_t := 0.0
+var _start := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -25,6 +29,8 @@ func is_held() -> bool:
 
 func _process(delta: float) -> void:
 	_press_t = maxf(0.0, _press_t - delta)
+	if _touch != -1:
+		held_t += delta
 	if glow and enabled or _press_t > 0.0:
 		queue_redraw()
 
@@ -37,12 +43,20 @@ func _input(event: InputEvent) -> void:
 		if event.pressed and _touch == -1 and _hit(event.position):
 			_touch = event.index
 			_press_t = 0.12
+			_start = event.position
+			drag = Vector2.ZERO
+			held_t = 0.0
 			if enabled:
 				pressed.emit()
 			queue_redraw()
 		elif not event.pressed and event.index == _touch:
 			_touch = -1
+			released.emit(drag, held_t)
+			drag = Vector2.ZERO
 			queue_redraw()
+	elif event is InputEventScreenDrag and event.index == _touch:
+		drag = event.position - _start
+		queue_redraw()
 
 
 func _hit(p: Vector2) -> bool:
@@ -81,6 +95,11 @@ func _draw() -> void:
 	if icon_tex:
 		var s := rr * 1.06
 		draw_texture_rect(icon_tex, Rect2(c - Vector2(s, s) * 0.5, Vector2(s, s)), false, mod)
+
+	if _touch != -1 and drag.length() > 24.0:          # куда тянем прицел
+		var dp := c + drag.limit_length(r * 0.8)
+		draw_line(c, dp, Color(1, 1, 1, 0.7), 5.0, true)
+		draw_circle(dp, r * 0.16, Color(1, 1, 1, 0.85))
 
 	if tag != "":
 		var font := get_theme_default_font()

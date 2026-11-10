@@ -58,6 +58,13 @@ var dash_cd := 0.0
 var _dash_t := 0.0
 var _dash_dir := Vector3.ZERO
 
+# характер бота: у каждого своя реакция и меткость
+var _react := 0.45
+var _dodge_t := 0.0
+var _dodge_dir := Vector3.ZERO
+var _dodge_cd := 0.0
+const SHOT_SPEED := {"knight": 16.0, "archer": 22.0, "hammer": 13.0, "mage": 11.0}
+
 var _visual: Node3D
 var _body: Node3D
 var _sword: Node3D         # оружие: меч, лук, молот или посох
@@ -102,6 +109,7 @@ func _col(key: String, fallback: Color) -> Color:
 
 func _ready() -> void:
 	_apply_hero_stats()
+	_react = randf_range(0.35, 0.65)
 	if display_only:
 		_build_visual()
 		set_physics_process(false)
@@ -118,6 +126,27 @@ func _ready() -> void:
 	add_child(cs)
 	_build_visual()
 	_build_hud()
+	var blob := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(1.2, 1.2)
+	q.orientation = PlaneMesh.FACE_Y
+	blob.mesh = q
+	var bm := StandardMaterial3D.new()
+	var gt := GradientTexture2D.new()
+	gt.fill = GradientTexture2D.FILL_RADIAL
+	gt.fill_from = Vector2(0.5, 0.5)
+	gt.fill_to = Vector2(1.0, 0.5)
+	var g := Gradient.new()
+	g.set_color(0, Color(0, 0, 0, 0.55))
+	g.set_color(1, Color(0, 0, 0, 0))
+	gt.gradient = g
+	bm.albedo_texture = gt
+	bm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	blob.material_override = bm
+	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	blob.position.y = 0.03
+	add_child(blob)
 
 
 # ================================================================ детали модели
@@ -267,7 +296,8 @@ func _build_knight() -> void:
 	_part(_body, _cyl(0.17, 0.21, 0.06), Vector3(0, 1.63, 0), steel)
 	_part(_body, _cyl(0.225, 0.225, 0.07), Vector3(0, 1.57, 0), cloth)
 	_part(_body, _boxm(Vector3(0.03, 0.34, 0.03)), Vector3(0, 1.42, 0.225), dark_steel)
-	_part(_body, _boxm(Vector3(0.34, 0.045, 0.04)), Vector3(0, 1.47, 0.21), black)
+	# смотровая щель светится цветом команды (ночью хорошо видно, кто где)
+	_part(_body, _boxm(Vector3(0.34, 0.045, 0.04)), Vector3(0, 1.47, 0.21), tc.lightened(0.45), Vector3.ZERO, Vector3.ONE, true)
 	for i in 3:
 		for hx in [-0.08, 0.08]:
 			_part(_body, _boxm(Vector3(0.035, 0.025, 0.03)), Vector3(hx, 1.37 - i * 0.045, 0.218), black)
@@ -538,9 +568,32 @@ func _finish_visual() -> void:
 	m.albedo_color = Color(1, 0.88, 0.3) if is_player else tc.lightened(0.2)
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	if not is_player:
-		m.albedo_color.a = 0.55
+		m.albedo_color.a = 0.7
 	ring.material_override = m
 	add_child(ring)
+	# мягкое свечение цвета команды на земле
+	var glow := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(1.9, 1.9)
+	q.orientation = PlaneMesh.FACE_Y
+	glow.mesh = q
+	var gm := StandardMaterial3D.new()
+	var gt := GradientTexture2D.new()
+	gt.fill = GradientTexture2D.FILL_RADIAL
+	gt.fill_from = Vector2(0.5, 0.5)
+	gt.fill_to = Vector2(1.0, 0.5)
+	var g := Gradient.new()
+	g.set_color(0, Color(tc.r, tc.g, tc.b, 0.35))
+	g.set_color(1, Color(tc.r, tc.g, tc.b, 0.0))
+	gt.gradient = g
+	gm.albedo_texture = gt
+	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	gm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	glow.material_override = gm
+	glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	glow.position.y = 0.035
+	add_child(glow)
 
 
 func _bar_quad(color: Color, size: Vector2, prio: int, y: float) -> MeshInstance3D:
@@ -722,7 +775,7 @@ func try_attack(aim: Vector3) -> bool:
 			return false
 		ammo -= 1.0
 	facing = _flat(aim)
-	_aim_hold = 0.35
+	_aim_hold = 0.2 if not bot else 0.35
 	_swing()
 	match hero:
 		"archer":
@@ -739,7 +792,11 @@ func try_attack(aim: Vector3) -> bool:
 			_spawn_wave(facing, 20.0, 0.6)
 	if not bot:
 		_attack_cd = float(BURST_CD.get(hero, 0.3))
-	main.sfx("swing", global_position, 0.0 if is_player else -4.0)
+	var snd: String = {"archer": "arrow", "mage": "fire"}.get(hero, "swing")
+	main.sfx(snd, global_position, 0.0 if is_player else -4.0)
+	# вспышка у оружия
+	main.fx_burst(global_position + facing * 0.6 + Vector3(0, 0.9, 0),
+		(main.team_colors[team] as Color).lightened(0.5), 5, 2.5, 0.06, 0.22, 0.0)
 	if is_player:
 		main._tut_attacks += 1
 	return true
@@ -756,8 +813,9 @@ func try_dash() -> bool:
 	facing = _dash_dir
 	if is_player:
 		main._tut_dash = true
-	main.sfx("swing", global_position, -3.0)
+	main.sfx("dash", global_position, 0.0 if is_player else -4.0)
 	main.fx_ring(global_position, Color(0.9, 0.85, 0.8), 1.4, 0.3)
+	main.fx_burst(global_position + Vector3(0, 0.4, 0), Color(0.9, 0.88, 0.85, 0.8), 10, 3.0, 0.1, 0.4, 0.5)
 	return true
 
 
@@ -858,6 +916,7 @@ func _respawn() -> void:
 	dash_cd = 0.0
 	_dash_t = 0.0
 	main.fx_ring(spawn_pos, main.team_colors[team], 1.8, 0.5)
+	main.fx_beam(spawn_pos, (main.team_colors[team] as Color).lightened(0.3))
 	main.fx_burst(spawn_pos + Vector3(0, 0.3, 0), (main.team_colors[team] as Color).lightened(0.5), 14, 3.0, 0.06, 0.7, 3.0)
 	if is_player:
 		main.sfx("respawn")
@@ -870,6 +929,7 @@ func respawn_left() -> float:
 # ================================================================ ИИ
 
 func _go(target: Vector3) -> void:
+	target = main.route(global_position, target)
 	var v := target - global_position
 	v.y = 0.0
 	move_dir = v.normalized() if v.length() > 0.4 else Vector3.ZERO
@@ -886,21 +946,41 @@ func _think(delta: float) -> void:
 		_strafe = -_strafe
 		_strafe_t = randf_range(0.8, 2.0)
 
-	var enemy = main.nearest_enemy(self, attack_range)
+	var enemy = _pick_target()
 	if enemy:
 		_aware_t += delta
 	else:
 		_aware_t = 0.0
-	# бот реагирует не сразу и целится неточно
-	if enemy and _aware_t > 0.45:
-		var to_e: Vector3 = enemy.global_position - global_position
+	# бот реагирует не сразу и целится неточно, но с упреждением
+	if enemy and _aware_t > _react:
+		var to_e: Vector3 = _lead(enemy)
 		if _attack_cd <= 0.0:
-			try_attack(to_e.rotated(Vector3.UP, deg_to_rad(randf_range(-16.0, 16.0))))
+			var err := randf_range(-16.0, 16.0)
+			if randf() < 0.15:
+				err += randf_range(-30.0, 30.0)      # иногда сильно мажет
+			try_attack(to_e.rotated(Vector3.UP, deg_to_rad(err)))
 		if super_charge >= 1.0:
 			_super_wait += delta
-			if _super_wait > 1.2:
+			var near_ok: bool = to_e.length() < attack_range * 0.8
+			if _super_wait > 1.2 and near_ok:
 				_super_wait = 0.0
 				try_super(to_e)
+
+	# увернуться от летящего во врага снаряда
+	_dodge_cd -= delta
+	if _dodge_t > 0.0:
+		_dodge_t -= delta
+		move_dir = _dodge_dir
+		return
+	if _dodge_cd <= 0.0:
+		var threat := _incoming()
+		if threat != Vector3.ZERO:
+			_dodge_cd = 1.2
+			if randf() < 0.55:                       # не всегда успевает
+				_dodge_t = 0.3
+				_dodge_dir = Vector3(-threat.z, 0, threat.x) * (1.0 if randf() < 0.5 else -1.0)
+				move_dir = _dodge_dir
+				return
 
 	var home: Vector3 = main.stations[team]
 	# «Захват знамени»: несущий — домой, защитник — у своего знамени или в погоню
@@ -913,10 +993,15 @@ func _think(delta: float) -> void:
 			_go(chase.global_position)
 			return
 	if hp < max_hp * 0.35 and not has_flag:
-		_go(home)
+		var hide = main.nearest_bush(global_position, 7.0)   # мало здоровья — спрятаться в куст
+		_go(hide if hide != null and carried == 0 else home)
 		return
 	if main.mode == "charge" and (carried >= 3 or (carried > 0 and main.batteries.is_empty())):
 		_go(home)
+		return
+	# «Захват знамени»: атакующий идёт за знаменем и стреляет на ходу, не застревая в драке
+	if main.mode == "flag" and role == "attack":
+		_go(main.flag_target(team))
 		return
 	if enemy and carried == 0:
 		var to2: Vector3 = enemy.global_position - global_position
@@ -941,6 +1026,45 @@ func _think(delta: float) -> void:
 		_:
 			var bat = main.nearest_battery(global_position)
 			_go(bat.global_position if bat else Vector3.ZERO)
+
+
+## Цель: из видимых врагов в зоне атаки — тот, кто ближе и слабее.
+func _pick_target():
+	var best = null
+	var best_s := INF
+	for k in main.knights:
+		if not k.alive or k.team == team or not main.can_see(team, k):
+			continue
+		var d: float = k.global_position.distance_to(global_position)
+		if d > attack_range:
+			continue
+		var s: float = d + (k.hp / k.max_hp) * 4.0 - (3.0 if k.has_flag else 0.0)
+		if s < best_s:
+			best_s = s
+			best = k
+	return best
+
+
+## Куда стрелять с упреждением (на ~70% от точного, чтобы не было идеально).
+func _lead(e) -> Vector3:
+	var to: Vector3 = e.global_position - global_position
+	to.y = 0.0
+	var t: float = to.length() / float(SHOT_SPEED.get(hero, 15.0))
+	var v: Vector3 = e.velocity
+	v.y = 0.0
+	return to + v * t * 0.7
+
+
+## Летит ли в меня вражеский снаряд: вернёт его направление или ноль.
+func _incoming() -> Vector3:
+	for b in get_tree().get_nodes_in_group("bolts"):
+		if b.team == team:
+			continue
+		var to: Vector3 = global_position - b.global_position
+		to.y = 0.0
+		if to.length() < 3.5 and to.normalized().dot(b.dir) > 0.85:
+			return b.dir
+	return Vector3.ZERO
 
 
 func _check_stuck(delta: float) -> void:

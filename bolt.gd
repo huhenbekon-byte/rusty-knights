@@ -51,6 +51,7 @@ func _box(size: Vector3) -> BoxMesh:
 
 
 func _ready() -> void:
+	add_to_group("bolts")
 	var base: Color = main.team_colors[team]
 	match kind:
 		"arrow":

@@ -65,10 +65,37 @@ const MAP_FLOOD := [
 	"bbb......b....b......bbb",
 ]
 
+const MAP_RIVER := [
+	"bbb..................bbb",
+	"bb....................bb",
+	"........................",
+	"........................",
+	"..##................##..",
+	"..#..................#..",
+	"......bb........bb......",
+	"......bb..####..bb......",
+	"bb....................bb",
+	"bbb.....#......#.....bbb",
+	"........#......#........",
+	"...##..............##...",
+	"...bb....bb..bb....bb...",
+	"...bb....bb..bb....bb...",
+	"........................",
+	"#.....##........##.....#",
+	"#......................#",
+	"...#.....b....b.....#...",
+	"wwBBBwwwwwwBBwwwwwwBBBww",
+	"wwBBBwwwwwwBBwwwwwwBBBww",
+]
+
 const ARENAS := [
 	{"name": "Двор замка", "map": MAP_TOP, "floor": Color(0.5, 0.48, 0.48), "stone": Color(1.0, 0.96, 1.04)},
 	{"name": "Затопленный двор", "map": MAP_FLOOD, "floor": Color(0.44, 0.46, 0.5), "stone": Color(0.9, 1.0, 1.05)},
+	{"name": "Речной рубеж", "map": MAP_RIVER, "floor": Color(0.48, 0.47, 0.44), "stone": Color(0.95, 0.98, 1.0)},
 ]
+const MODE_ARENA := {"charge": 0, "brawl": 1, "flag": 2}   # у каждого режима своя карта
+const NIGHT := true                                           # бои идут ночью
+const NIGHT_TINT := Color(0.4, 0.5, 0.68)                    # для неосвещаемых спрайтов
 
 ## Каменный блок: верх — плитка stone_top (повёрнута случайно), стенки — одна из четырёх
 ## плиток атласа stone_side (по блоку случайно). size — размер блока в метрах.
@@ -117,6 +144,7 @@ void fragment() {
 const WATER_SHADER := """
 shader_type spatial;
 render_mode unshaded;
+uniform vec3 tint = vec3(1.0);
 varying vec3 wp;
 void vertex() { wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
 void fragment() {
@@ -124,7 +152,7 @@ void fragment() {
 		+ 0.5 * sin((wp.x + wp.z) * 4.0 + TIME * 2.3);
 	vec3 deep = vec3(0.16, 0.42, 0.72);
 	vec3 light = vec3(0.42, 0.74, 0.95);
-	ALBEDO = mix(deep, light, smoothstep(0.15, 1.2, w));
+	ALBEDO = mix(deep, light, smoothstep(0.15, 1.2, w)) * tint;
 }
 """
 
@@ -145,11 +173,13 @@ var _tex := {}
 var _bush_mat: StandardMaterial3D
 var _bush_mat_seen: StandardMaterial3D
 const SFX_NAMES := ["swing", "hit", "wall", "death", "pickup", "score", "ready",
-	"super", "win", "lose", "click", "respawn", "slam"]
+	"super", "win", "lose", "click", "respawn", "slam",
+	"dash", "coin", "capture", "chest", "reward", "arrow", "fire", "kill"]
 var _sfx := {}
 var _sfx_pool: Array = []
 var _sfx_next := 0
 var _music: AudioStreamPlayer
+var _amb: AudioStreamPlayer
 var _sprite_mats: Array = []
 var _sprite_mats_seen: Array = []
 const BUSH_SPRITES := 6        # спрайтов в bushes.png (в ряд по 256x256)
@@ -161,6 +191,7 @@ var _super_btn
 var _dash_btn
 var _ammo_bar
 var _exit_box: Control
+var _low_hp: TextureRect
 var _score_bar
 var _info: Label
 var _result: Control
@@ -212,14 +243,8 @@ func _ready() -> void:
 		tutorial = false
 	if tutorial:
 		mode = "charge"
-	# арены по очереди от боя к бою; за меню — случайная
-	var ai := randi() % ARENAS.size()
-	if in_game:
-		ai = int(Profile.data.get("arena_i", 0)) % ARENAS.size()
-		if not tutorial:
-			Profile.data.arena_i = ai + 1
-		else:
-			ai = 0
+	# у каждого режима своя карта
+	var ai: int = MODE_ARENA.get(mode, 0)
 	if _arg("--arena=") != "":
 		ai = int(_arg("--arena=")) % ARENAS.size()
 	arena = ARENAS[ai]
@@ -261,6 +286,21 @@ func _arg(prefix: String) -> String:
 ## Кадр 1 — главное меню, кадры 2–3 — бой (игрок под управлением бота).
 func _setup_screenshots(dir: String) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
+	var ch := _arg("--chest=")
+	if ch != "":                                    # кадры открытия сундука
+		_open_menu()
+		_menu.show_page("shop")
+		Profile.data.coins = 9999
+		Profile.data.gems = 999
+		Profile.data.free_chest_at = 0.0
+		await get_tree().create_timer(1.0).timeout
+		_menu._buy_chest(ch)
+		for i in 5:
+			await get_tree().create_timer([0.4, 0.9, 0.7, 0.8, 1.2][i]).timeout
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png("%s/chest_%d.png" % [dir, i + 1])
+		get_tree().quit()
+		return
 	var tab := _arg("--tab=")
 	if tab != "":                                   # снимок одной вкладки меню
 		_open_menu()
@@ -282,6 +322,11 @@ func _setup_screenshots(dir: String) -> void:
 				await RenderingServer.frame_post_draw
 				get_viewport().get_texture().get_image().save_png("%s/play_%d.png" % [dir, i + 1])
 			print("score ", score, " game_over ", game_over)
+			if "--debug" in OS.get_cmdline_user_args():
+				for k in knights:
+					print("  t", k.team, " ", k.hero, " ", k.role, " pos ", Vector2(k.global_position.x, k.global_position.z).snapped(Vector2(0.1, 0.1)), " alive ", k.alive, " flag ", k.has_flag)
+				for f in flags:
+					print("  flag ", f.state, " ", f.pos)
 		if game_over:
 			print("winner shown")
 		get_tree().quit()
@@ -338,9 +383,11 @@ func _bush_sprite_mat(i: int, seen: bool) -> StandardMaterial3D:
 	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	var nt := NIGHT_TINT if NIGHT else Color.WHITE
+	m.albedo_color = nt
 	if seen:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		m.albedo_color = Color(1, 1, 1, 0.4)
+		m.albedo_color = Color(nt.r, nt.g, nt.b, 0.4)
 	else:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 		m.alpha_scissor_threshold = 0.5
@@ -413,10 +460,10 @@ func _disc(pos: Vector3, radius: float, mat: Material, h := 0.06) -> MeshInstanc
 func _build_world() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.13, 0.14, 0.24)
+	env.background_color = Color(0.04, 0.05, 0.12) if NIGHT else Color(0.13, 0.14, 0.24)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.9, 0.95, 1.0)
-	env.ambient_light_energy = 0.75
+	env.ambient_light_color = Color(0.55, 0.62, 0.95) if NIGHT else Color(0.9, 0.95, 1.0)
+	env.ambient_light_energy = 0.62 if NIGHT else 0.75
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -424,12 +471,19 @@ func _build_world() -> void:
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-60, -35, 0)
-	sun.light_color = Color(1.0, 0.96, 0.86)
-	sun.light_energy = 1.0
+	sun.light_color = Color(0.7, 0.78, 1.0) if NIGHT else Color(1.0, 0.96, 0.86)   # ночью — луна
+	sun.light_energy = 0.75 if NIGHT else 1.0
 	sun.shadow_enabled = true
 	sun.shadow_opacity = 0.55
 	sun.directional_shadow_max_distance = 40.0
 	add_child(sun)
+	if NIGHT:                                       # контровый свет: силуэты героев видны в темноте
+		var rim := DirectionalLight3D.new()
+		rim.rotation_degrees = Vector3(-25, 160, 0)
+		rim.light_color = Color(0.55, 0.65, 1.0)
+		rim.light_energy = 0.45
+		rim.shadow_enabled = false
+		add_child(rim)
 
 	_camera = Camera3D.new()
 	_camera.keep_aspect = Camera3D.KEEP_WIDTH
@@ -456,7 +510,7 @@ func _build_arena() -> void:
 	_box(Vector3(0, -0.25, 0), Vector3(HALF_W * 2 + 24, 0.5, HALF_L * 2 + 20), floor_mat, false)
 
 	# живая изгородь по периметру (твёрдая)
-	var hedge := _textured("leaves", Color(0.75, 0.85, 0.75), 0.7)
+	var hedge := _textured("leaves", Color(0.46, 0.56, 0.58) if NIGHT else Color(0.75, 0.85, 0.75), 0.7)
 	var hh := 1.6
 	_box(Vector3(0, hh / 2, -HALF_L - 0.5), Vector3(HALF_W * 2 + 2, hh, 1), hedge)
 	_box(Vector3(0, hh / 2, HALF_L + 0.5), Vector3(HALF_W * 2 + 2, hh, 1), hedge)
@@ -469,11 +523,15 @@ func _build_arena() -> void:
 	var wsh := Shader.new()
 	wsh.code = WATER_SHADER
 	water_mat.shader = wsh
+	if NIGHT:
+		water_mat.set_shader_parameter("tint", Vector3(0.55, 0.62, 0.85))
+	var plank := toon(Color(0.5, 0.33, 0.2), false, true)
+	var plank_dark := toon(Color(0.33, 0.21, 0.13))
 	var rim := toon(Color(0.42, 0.4, 0.46))
-	_bush_mat = _textured("leaves", Color(0.7, 0.8, 0.7), 1.0)
+	_bush_mat = _textured("leaves", Color(0.45, 0.55, 0.58) if NIGHT else Color(0.7, 0.8, 0.7), 1.0)
 	_bush_mat_seen = _bush_mat.duplicate() as StandardMaterial3D
 	_bush_mat_seen.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_bush_mat_seen.albedo_color = Color(0.7, 0.8, 0.7, 0.4)
+	_bush_mat_seen.albedo_color = Color(_bush_mat.albedo_color, 0.4)
 	for i in BUSH_SPRITES:
 		_sprite_mats.append(_bush_sprite_mat(i, false))
 		_sprite_mats_seen.append(_bush_sprite_mat(i, true))
@@ -484,6 +542,15 @@ func _build_arena() -> void:
 			match line[col]:
 				"#":
 					_box(p + Vector3(0, 0.6, 0), Vector3(1, 1.2, 1), stone)
+				"B":
+					# мост: доски поперёк течения, по краям моста — перила
+					_box(p + Vector3(0, -0.02, 0), Vector3(1, 0.04, 1), water_mat, false)
+					for i in 3:
+						_box(p + Vector3(-0.33 + i * 0.33, 0.07, 0), Vector3(0.3, 0.1, 1.0), plank if i != 1 else plank_dark, false)
+					for d in [-1, 1]:
+						if _cell(col + d, row) == "w":
+							_box(p + Vector3(d * 0.45, 0.35, 0), Vector3(0.08, 0.08, 1.0), plank, false)
+							_box(p + Vector3(d * 0.45, 0.2, 0), Vector3(0.1, 0.3, 0.1), plank_dark, false)
 				"w":
 					# вода: героев не пускает (слой 4), снаряды пролетают (они видят только слой 1)
 					_box(p + Vector3(0, 0.03, 0), Vector3(1, 0.04, 1), water_mat, false)
@@ -499,7 +566,7 @@ func _build_arena() -> void:
 					add_child(body)
 					# каменный бортик там, где вода граничит с полом
 					for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-						if _cell(col + d.x, row + d.y) != "w":
+						if not (_cell(col + d.x, row + d.y) in ["w", "B"]):
 							var off := Vector3(d.x * 0.47, 0.06, d.y * 0.47)
 							var sz := Vector3(0.08 if d.x != 0 else 1.0, 0.12, 0.08 if d.y != 0 else 1.0)
 							_box(p + off, sz, rim, false)
@@ -518,8 +585,9 @@ func _build_arena() -> void:
 					_bushes.append({"pos": p, "mesh": m, "sprite": spr, "idx": idx})
 
 	# центр, где появляются кристаллы
-	_disc(Vector3.ZERO, 2.3, toon(Color(0.36, 0.33, 0.5)))
-	_disc(Vector3.ZERO, 2.05, _plate("plate_center"), 0.08)      # круглая плита с узором
+	if mode != "flag":
+		_disc(Vector3.ZERO, 2.3, toon(Color(0.36, 0.33, 0.5)))
+		_disc(Vector3.ZERO, 2.05, _plate("plate_center"), 0.08)      # круглая плита с узором
 
 	# станции команд: каменный круг + арка со знаменем
 	for t in 2:
@@ -541,6 +609,16 @@ func _build_arena() -> void:
 			_box(s + Vector3(dx, 1.2, 1.7 * back), Vector3(0.45, 2.4, 0.45), _stone_mat(Vector3(0.45, 2.4, 0.45)))
 		_box(s + Vector3(0, 2.55, 1.7 * back), Vector3(3.5, 0.4, 0.5), _stone_mat(Vector3(3.5, 0.4, 0.5)))
 		_box(s + Vector3(0, 1.7, 1.7 * back), Vector3(1.2, 1.3, 0.06), toon(col), false)
+	if NIGHT:
+		for t in 2:
+			var s2: Vector3 = stations[t]
+			var bk := 1.0 if t == 0 else -1.0
+			for dx in [-2.5, 2.5]:
+				_torch(s2 + Vector3(dx, 0, 0.9 * bk), 1.7)
+		for zs in [-10.0, 10.0]:
+			for xs in [-1.0, 1.0]:
+				_torch(Vector3((HALF_W + 0.5) * xs, 1.6, zs), 0.6)
+		_fireflies()
 	_build_decor()
 
 
@@ -573,6 +651,8 @@ func _prop_mat(i: int) -> StandardMaterial3D:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 		m.alpha_scissor_threshold = 0.5
 		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		if NIGHT:                                      # за картой темнее, чем на арене
+			m.albedo_color = Color(0.5, 0.55, 0.78)
 		_prop_mats[i] = m
 	return _prop_mats[i]
 
@@ -592,7 +672,7 @@ func _prop(i: int, pos: Vector3, scl := 1.0) -> void:
 func _build_decor() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 2026
-	# крепостные стены за дальними краями, в середине — стена со знаменем, по бокам жаровни
+	# крепостные стены за дальними краями, в середине — стена со знаменем, по бокам жаровни с огнём
 	for zs in [-1.0, 1.0]:
 		var z: float = (HALF_L + 2.2) * zs
 		var x := -17.0
@@ -605,27 +685,48 @@ func _build_decor() -> void:
 			x += 3.4
 			k += 1
 		for tx in [-4.6, 4.6]:
-			_prop(12, Vector3(tx, 0, z - 0.9 * zs))
+			var bp := Vector3(tx, 0, z - 0.9 * zs)
+			_prop(12, bp)
+			if NIGHT:
+				_fire_particles(bp + Vector3(0, 1.25, 0), 1.6)
 		for tx in [-2.6, 2.6]:
 			_prop(5, Vector3(tx, 0, z - 1.3 * zs), 0.9)
-	# вдоль боковых изгородей — ящики, бочки, камни, деревья, телеги
-	var side := [7, 8, 9, 13, 14, 15, 18, 19, 20, 22, 10, 12, 11, 6,
-		28, 29, 31, 32, 36, 39, 40, 41, 42]
+		for tx in [-8.0, 8.0]:                       # каменные шпили по краям стен
+			_prop(42, Vector3(tx, 0, z - 1.0 * zs), 0.9)
+	# вдоль боков — тематические группы, ближний ряд мелкий, дальний — крупный
+	var groups := [
+		[[7, 0.0, 0.0, 1.0], [8, 0.6, 0.7, 0.9], [9, -0.3, 1.4, 1.0], [17, 0.9, -0.6, 0.7]],      # склад
+		[[32, 1.6, 0.0, 1.0], [40, 0.2, 0.6, 0.9], [33, 2.0, 1.6, 1.0], [30, 0.0, -0.7, 0.8]],    # руины
+		[[20, 0.3, 0.0, 1.0], [21, -0.4, 0.5, 0.9], [19, 1.9, 0.8, 1.0], [20, 0.6, 1.4, 0.85]],   # кладбище
+		[[22, 0.6, 0.0, 1.0], [6, -0.2, 1.5, 1.0], [12, 0.0, -1.1, 0.9], [10, 1.8, 1.2, 1.0]],     # лагерь
+		[[28, 1.8, 0.0, 1.0], [29, 0.2, 0.9, 0.9], [31, -0.1, -0.5, 0.8], [18, 0.8, 1.7, 1.0]],    # камни
+		[[41, 1.2, 0.0, 1.0], [11, -0.1, 0.8, 1.0], [39, 2.0, 1.4, 1.0], [16, 0.1, -0.6, 0.8]],    # застава
+	]
 	for xs in [-1.0, 1.0]:
-		var z := -HALF_L + 0.5
-		while z < HALF_L:
-			var idx: int = side[rng.randi_range(0, side.size() - 1)]
-			var x: float = (HALF_W + 1.6 + rng.randf_range(-0.1, 0.4)) * xs
-			_prop(idx, Vector3(x, 0, z), rng.randf_range(0.85, 1.1))
-			if idx == 20:                                   # у надгробия череп
-				_prop(21, Vector3(x - 0.8 * xs, 0, z + 0.5), 0.9)
-			elif rng.randf() < 0.35:                        # трава и камешки между крупными
-				_prop([17, 30, 16, 31][rng.randi_range(0, 3)], Vector3(x + rng.randf_range(-0.6, 0.6), 0, z + 1.2), 0.7)
-			z += rng.randf_range(2.3, 3.4)
-		# дальше — земляные обрывы с травой
+		var z := -HALF_L + 1.5
+		var gi := 0 if xs < 0 else 3
+		while z < HALF_L - 0.5:
+			var grp: Array = groups[gi % groups.size()]
+			for it in grp:
+				var idx: int = it[0]
+				var p := Vector3((HALF_W + 1.4 + float(it[1])) * xs, 0, z + float(it[2]))
+				if absf(p.z) > HALF_L + 0.5:
+					continue
+				_prop(idx, p, float(it[3]) * rng.randf_range(0.92, 1.06))
+				if NIGHT and idx == 12:
+					_fire_particles(p + Vector3(0, 1.2, 0), 1.5)
+				if NIGHT and idx == 11:
+					_fire_particles(p + Vector3(0, 1.3, 0), 1.0)
+			z += rng.randf_range(5.6, 6.6)
+			gi += 1
+		# дальний ряд: деревья и шпили между группами, ещё дальше — обрывы с травой
+		var z3 := -HALF_L + 4.0
+		while z3 < HALF_L:
+			_prop([19, 42, 19, 28][rng.randi_range(0, 3)], Vector3((HALF_W + 4.4) * xs, 0, z3), rng.randf_range(0.9, 1.15))
+			z3 += rng.randf_range(4.5, 6.5)
 		var z2 := -HALF_L - 1.0
 		while z2 < HALF_L + 1.0:
-			_prop([23, 24, 25][rng.randi_range(0, 2)], Vector3((HALF_W + 3.6) * xs, 0, z2))
+			_prop([23, 24, 25][rng.randi_range(0, 2)], Vector3((HALF_W + 5.6) * xs, 0, z2))
 			z2 += 2.5
 	# углы
 	for c in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
@@ -654,6 +755,113 @@ func _stone_mat(size: Vector3) -> ShaderMaterial:
 	return _stone_mats[key]
 
 
+var _torch_lights: Array = []
+var _fire_mat: StandardMaterial3D
+
+
+func _fire_particles(pos: Vector3, scale_k := 1.0) -> CPUParticles3D:
+	if _fire_mat == null:
+		_fire_mat = StandardMaterial3D.new()
+		_fire_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_fire_mat.vertex_color_use_as_albedo = true
+		_fire_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_fire_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_fire_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	var p := CPUParticles3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(0.22, 0.22) * scale_k
+	q.material = _fire_mat
+	p.mesh = q
+	p.amount = 18
+	p.lifetime = 0.55
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.07 * scale_k
+	p.direction = Vector3.UP
+	p.spread = 14.0
+	p.initial_velocity_min = 0.5 * scale_k
+	p.initial_velocity_max = 1.1 * scale_k
+	p.gravity = Vector3(0, 1.2, 0)
+	var curve := Curve.new()
+	curve.add_point(Vector2(0, 0.8))
+	curve.add_point(Vector2(0.3, 1.0))
+	curve.add_point(Vector2(1, 0.1))
+	p.scale_amount_curve = curve
+	var g := Gradient.new()
+	g.set_color(0, Color(1.0, 0.9, 0.45, 0.95))
+	g.set_color(1, Color(0.9, 0.15, 0.05, 0.0))
+	g.add_point(0.4, Color(1.0, 0.5, 0.12, 0.8))
+	p.color_ramp = g
+	p.position = pos
+	add_child(p)
+	return p
+
+
+## Факел: столб, чаша, живой огонь и тёплый свет, который чуть дрожит.
+func _torch(pos: Vector3, pole_h := 1.6) -> void:
+	if pole_h > 0.8:
+		_box(pos + Vector3(0, pole_h / 2, 0), Vector3(0.14, pole_h, 0.14), toon(Color(0.3, 0.2, 0.14), false, true), false)
+	var bowl := _disc(pos + Vector3(0, pole_h - 0.02, 0), 0.2, toon(Color(0.35, 0.33, 0.38), false, true), 0.16)
+	bowl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fire_particles(pos + Vector3(0, pole_h + 0.15, 0))
+	var l := OmniLight3D.new()
+	l.light_color = Color(1.0, 0.62, 0.3)
+	l.light_energy = 1.5
+	l.omni_range = 6.5
+	l.omni_attenuation = 1.2
+	l.position = pos + Vector3(0, pole_h + 0.5, 0)
+	add_child(l)
+	_torch_lights.append(l)
+
+
+## Светлячки над ареной.
+func _fireflies() -> void:
+	var p := CPUParticles3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(0.09, 0.09)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.vertex_color_use_as_albedo = true
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	q.material = m
+	p.mesh = q
+	p.amount = 46
+	p.lifetime = 5.0
+	p.preprocess = 5.0
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	p.emission_box_extents = Vector3(HALF_W + 2.0, 0.7, HALF_L)
+	p.direction = Vector3(1, 0.3, 0)
+	p.spread = 180.0
+	p.initial_velocity_min = 0.15
+	p.initial_velocity_max = 0.45
+	p.gravity = Vector3.ZERO
+	var g := Gradient.new()
+	g.set_color(0, Color(0.8, 1.0, 0.4, 0.0))
+	g.set_color(1, Color(0.8, 1.0, 0.4, 0.0))
+	g.add_point(0.3, Color(0.85, 1.0, 0.45, 1.0))
+	g.add_point(0.7, Color(1.0, 0.9, 0.4, 0.9))
+	p.color_ramp = g
+	p.position = Vector3(0, 1.1, 0)
+	add_child(p)
+
+
+## Путь через реку («Речной рубеж»): если цель на том берегу — сначала к ближайшему мосту.
+func route(from: Vector3, to: Vector3) -> Vector3:
+	if mode != "flag" or signf(from.z) == signf(to.z) or absf(from.z) < 0.25:
+		return to
+	var best := 0.0
+	var best_d := INF
+	for bx in [-8.5, 0.0, 8.5]:
+		var d: float = absf(from.x - bx) + absf(to.x - bx)
+		if d < best_d:
+			best_d = d
+			best = bx
+	if absf(from.x - best) > 0.7 and absf(from.z) > 2.2:
+		return Vector3(best, 0, signf(from.z) * 2.6)       # подойти ко входу на мост
+	return Vector3(best, 0, -signf(from.z) * 2.8)           # перейти на тот берег
+
+
 func _cell(col: int, row: int) -> String:
 	if row < 0 or row >= _grid.size():
 		return "#"
@@ -670,7 +878,7 @@ func _free_spot(p: Vector3) -> Vector3:
 			for dx in range(-r, r + 1):
 				var q := p + Vector3(dx, 0, dz)
 				var c := _cell(int(floor(q.x + HALF_W)), int(floor(q.z + HALF_L)))
-				if c == "." or c == "b":
+				if c == "." or c == "b" or c == "B":
 					return Vector3(floor(q.x + HALF_W) - HALF_W + 0.5, 0, floor(q.z + HALF_L) - HALF_L + 0.5)
 	return Vector3.ZERO
 
@@ -800,6 +1008,24 @@ func _build_ui() -> void:
 	_anchor(_info, 0, 0, 1, 0, 112, 160, -112, 270)
 	root.add_child(_info)
 
+	_low_hp = TextureRect.new()
+	var gt := GradientTexture2D.new()
+	gt.fill = GradientTexture2D.FILL_RADIAL
+	gt.fill_from = Vector2(0.5, 0.5)
+	gt.fill_to = Vector2(1.05, 0.5)
+	var gr := Gradient.new()
+	gr.set_color(0, Color(0.8, 0, 0, 0))
+	gr.set_color(1, Color(0.8, 0.02, 0.02, 0.75))
+	gr.add_point(0.6, Color(0.8, 0, 0, 0))
+	gt.gradient = gr
+	_low_hp.texture = gt
+	_low_hp.stretch_mode = TextureRect.STRETCH_SCALE
+	_low_hp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_low_hp.modulate.a = 0.0
+	_anchor(_low_hp, 0, 0, 1, 1, 0, 0, 0, 0)
+	root.add_child(_low_hp)
+	root.move_child(_low_hp, 0)
+
 	if in_game:                                    # название арены в начале боя
 		var an := _label(54, Color(1, 0.85, 0.4), arena.name)
 		_anchor(an, 0, 0.3, 1, 0.3, 0, -50, 0, 50)
@@ -823,6 +1049,7 @@ func _build_ui() -> void:
 	_attack_btn.frame = load("res://ui_btn.png")
 	_attack_btn.icon_tex = hero_icon
 	_anchor(_attack_btn, 1, 1, 1, 1, -250, -340, -30, -120)
+	_attack_btn.released.connect(_on_attack_release)
 	root.add_child(_attack_btn)
 
 	_ammo_bar = AmmoBarScript.new()
@@ -835,7 +1062,7 @@ func _build_ui() -> void:
 	_super_btn.icon_tex = hero_icon
 	_super_btn.tag = "ULT"
 	_anchor(_super_btn, 1, 1, 1, 1, -420, -520, -244, -344)
-	_super_btn.pressed.connect(_on_super)
+	_super_btn.released.connect(_on_super_release)
 	root.add_child(_super_btn)
 
 	_dash_btn = TouchButtonScript.new()
@@ -913,6 +1140,10 @@ func _update_ui() -> void:
 	_attack_btn.queue_redraw()
 	_ammo_bar.ammo = player.ammo
 	_ammo_bar.queue_redraw()
+	var danger := 0.0
+	if player.alive and not game_over and player.hp < player.max_hp * 0.4:
+		danger = (1.0 - player.hp / (player.max_hp * 0.4)) * (0.75 + 0.25 * sin(Time.get_ticks_msec() * 0.008))
+	_low_hp.modulate.a = lerpf(_low_hp.modulate.a, danger, 0.2)
 
 
 # ---------------------------------------------------------------- игровой цикл
@@ -935,6 +1166,9 @@ func _process(delta: float) -> void:
 		_camera.position += Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)) * _shake * 0.35
 		_shake = maxf(0.0, _shake - delta * 2.5)
 
+	var tm := Time.get_ticks_msec() * 0.001
+	for i in _torch_lights.size():
+		_torch_lights[i].light_energy = 1.45 + sin(tm * 9.0 + i * 1.7) * 0.12 + sin(tm * 23.0 + i) * 0.08
 	for b in batteries:
 		b.rotation.y += delta * 2.5
 		b.position.y = 0.55 + sin(Time.get_ticks_msec() * 0.004 + b.position.x) * 0.08
@@ -1026,21 +1260,105 @@ func _update_tutorial(delta: float) -> void:
 		_super_btn.scale = Vector2(pulse, pulse)
 
 
+const AIM_DEAD := 28.0          # насколько потянуть кнопку, чтобы целиться вручную
+const AIM_RANGE := {"knight": 9.6, "archer": 13.2, "hammer": 3.6, "mage": 9.4}
+const ULT_RANGE := {"knight": 11.0, "archer": 17.0, "hammer": 4.2, "mage": 7.0}
+var _aim_line: MeshInstance3D
+
+
 func _handle_player_combat() -> void:
 	if _super_key:
 		_super_key = false
 		_on_super()
 	if not player.alive:
+		_show_aim(Vector2.ZERO, 0.0)
 		return
-	if _attack_btn.is_held() or Input.is_physical_key_pressed(KEY_SPACE):
+	# тянешь кнопку — линия прицела; держишь не двигая — автоогонь
+	var shown := false
+	for b in [_attack_btn, _super_btn]:
+		if b.is_held() and b.drag.length() > AIM_DEAD:
+			var rng: float = (AIM_RANGE if b == _attack_btn else ULT_RANGE).get(str(player.hero), 9.0)
+			if b == _super_btn and player.hero == "mage":
+				rng = clampf(b.drag.length() / (b.size.x * 0.4), 0.35, 1.0) * rng
+			_show_aim(b.drag, rng)
+			shown = true
+	if not shown:
+		_show_aim(Vector2.ZERO, 0.0)
+	if _attack_btn.is_held() and _attack_btn.drag.length() <= AIM_DEAD and _attack_btn.held_t > 0.28:
+		player.try_attack(_player_aim())
+	if Input.is_physical_key_pressed(KEY_SPACE):
 		player.try_attack(_player_aim())
 
 
+func _on_attack_release(drag: Vector2, held: float) -> void:
+	if not player.alive or game_over:
+		return
+	if drag.length() > AIM_DEAD:
+		player.try_attack(Vector3(drag.x, 0, drag.y))
+	elif held <= 0.28:
+		player.try_attack(_player_aim())
+
+
+func _on_super_release(drag: Vector2, _held: float) -> void:
+	if not player.alive or game_over or player.super_charge < 1.0:
+		return
+	if drag.length() > AIM_DEAD:
+		var dir := Vector3(drag.x, 0, drag.y).normalized()
+		var dist := 6.0
+		if player.hero == "mage":
+			dist = clampf(drag.length() / (_super_btn.size.x * 0.4), 0.35, 1.0) * 7.0
+		player.try_super(dir * dist)
+	else:
+		player.try_super(_player_aim())
+
+
+## Линия прицела на земле от героя.
+func _show_aim(drag: Vector2, length: float) -> void:
+	if _aim_line == null:
+		_aim_line = MeshInstance3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(0.5, 1.0)
+		q.center_offset = Vector3(0, 0.5, 0)
+		_aim_line.mesh = q
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.albedo_color = Color(1, 1, 1, 0.38)
+		m.no_depth_test = true
+		_aim_line.material_override = m
+		_aim_line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_aim_line)
+	_aim_line.visible = length > 0.0
+	if length <= 0.0:
+		return
+	var a := atan2(drag.x, drag.y)
+	_aim_line.global_position = player.global_position + Vector3(0, 0.08, 0)
+	_aim_line.basis = Basis(Vector3.UP, a) * Basis(Vector3.RIGHT, PI / 2)
+	_aim_line.scale = Vector3(1, length, 1)
+
+
+## Автоприцел: ближайший враг, но тех, кто впереди по ходу, — в первую очередь.
 func _player_aim() -> Vector3:
-	var e = nearest_enemy(player, 9.0)
-	if e:
-		return e.global_position - player.global_position
-	return player.facing
+	var best = null
+	var best_score := INF
+	var mv: Vector3 = player.move_dir
+	for k in knights:
+		if not k.alive or k.team == player.team or not can_see(player.team, k):
+			continue
+		var to: Vector3 = k.global_position - player.global_position
+		to.y = 0.0
+		var d := to.length()
+		if d > 9.5:
+			continue
+		var sc := d
+		if mv.length() > 0.2 and to.normalized().dot(mv.normalized()) < -0.2:
+			sc += 6.0                       # враг за спиной — только если впереди никого
+		if sc < best_score:
+			best_score = sc
+			best = k
+	if best:
+		return best.global_position - player.global_position
+	return player.move_dir if player.move_dir.length() > 0.2 else player.facing
 
 
 func _on_dash() -> void:
@@ -1099,7 +1417,7 @@ func _handle_pickups() -> void:
 				k.carried += 1
 				batteries.remove_at(i)
 				b.queue_free()
-				sfx("pickup", kp, 0.0 if k.is_player else -5.0)
+				sfx("coin", kp, 0.0 if k.is_player else -5.0)
 				fx_burst(b.position, Color(1.0, 0.7, 0.35), 10, 2.5, 0.06, 0.5, 2.0)
 		var st: Vector3 = stations[k.team]
 		if k.carried > 0 and Vector2(st.x - kp.x, st.z - kp.z).length() < 1.8:
@@ -1184,6 +1502,17 @@ func _setup_audio() -> void:
 	_music.finished.connect(func(): _music.play())   # музыка по кругу
 	_music.play()
 	_music.stream_paused = not music_on
+	if NIGHT:
+		_amb = AudioStreamPlayer.new()
+		var st = load("res://ambience.wav")
+		if st is AudioStreamWAV:
+			st.loop_mode = AudioStreamWAV.LOOP_FORWARD
+			st.loop_end = st.data.size() / 2
+		_amb.stream = st
+		_amb.volume_db = -13.0
+		add_child(_amb)
+		_amb.play()
+		_amb.stream_paused = not sound_on
 
 
 ## Проиграть звук. pos — где он прозвучал (дальше от игрока — тише), null — без затухания.
@@ -1234,6 +1563,18 @@ func nearest_enemy(me, max_dist: float):
 			if d < best_d:
 				best_d = d
 				best = k
+	return best
+
+
+## Ближайший куст в пределах max_d (или null).
+func nearest_bush(pos: Vector3, max_d: float):
+	var best = null
+	var best_d := max_d
+	for b in _bushes:
+		var d: float = (b.pos as Vector3).distance_to(pos)
+		if d < best_d:
+			best_d = d
+			best = b.pos
 	return best
 
 
@@ -1354,6 +1695,7 @@ func _update_flags(delta: float) -> void:
 					fx_text(st + Vector3(0, 3.0, 0), "ЗНАМЯ ЗАХВАЧЕНО!", team_colors[c.team], 80)
 					fx_burst(st + Vector3(0, 0.5, 0), (team_colors[c.team] as Color).lightened(0.4), 30, 6.0, 0.09, 0.9, -6.0)
 					sfx("score")
+					sfx("capture", null, -2.0 if c.team == player.team else -6.0)
 					shake(0.4, st)
 					_flag_home(t)
 					if score[c.team] >= win_score:
@@ -1484,6 +1826,8 @@ func on_knight_died(k, killer = null) -> void:
 		_drop_flag(k)
 	if killer != null and is_instance_valid(killer) and killer == player:
 		note("kos")
+		sfx("kill", null, -3.0)
+		fx_text(k.global_position + Vector3(0, 2.6, 0), "Повержен!", Color(1, 0.85, 0.4), 72)
 	if mode == "brawl" and not game_over:
 		var t := 1 - int(k.team)
 		score[t] += 1
@@ -1571,6 +1915,33 @@ func fx_ring(pos: Vector3, color: Color, radius := 2.5, time := 0.45) -> void:
 
 
 ## Всплывающий текст над головой (урон, очки).
+## Столб света (возрождение).
+func fx_beam(pos: Vector3, color: Color) -> void:
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.55
+	cm.bottom_radius = 0.75
+	cm.height = 6.0
+	cm.cap_top = false
+	cm.cap_bottom = false
+	mi.mesh = cm
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_color = Color(color.r, color.g, color.b, 0.55)
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = Vector3(pos.x, 3.0, pos.z)
+	mi.scale = Vector3(0.3, 1, 0.3)
+	add_child(mi)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(mi, "scale", Vector3(1, 1, 1), 0.15)
+	tw.tween_property(m, "albedo_color:a", 0.0, 0.6).set_delay(0.15)
+	tw.chain().tween_callback(mi.queue_free)
+
+
 func fx_text(pos: Vector3, text: String, color: Color, size := 64) -> void:
 	var l := Label3D.new()
 	l.text = text
@@ -1663,6 +2034,8 @@ func apply_settings() -> void:
 	shake_on = st.get("shake", true)
 	if _music:
 		_music.stream_paused = not music_on
+	if _amb:
+		_amb.stream_paused = not sound_on
 
 
 func _load_settings() -> void:
