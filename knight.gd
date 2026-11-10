@@ -48,6 +48,16 @@ var _unstuck_dir := Vector3.ZERO
 var _leap_t := 0.0         # прыжок Молотобойца
 var _leap_dir := Vector3.ZERO
 
+# у игрока атаки — заряды: 3 подряд, потом копятся заново (у ботов — простая перезарядка)
+const MAX_AMMO := 3
+const RELOAD := {"knight": 0.62, "archer": 0.68, "hammer": 1.0, "mage": 0.95}   # секунд на заряд
+const BURST_CD := {"knight": 0.26, "archer": 0.28, "hammer": 0.42, "mage": 0.36}  # пауза между ударами
+const DASH_CD := 3.5
+var ammo := 3.0
+var dash_cd := 0.0
+var _dash_t := 0.0
+var _dash_dir := Vector3.ZERO
+
 var _visual: Node3D
 var _body: Node3D
 var _sword: Node3D         # оружие: меч, лук, молот или посох
@@ -98,7 +108,7 @@ func _ready() -> void:
 		return
 	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	collision_layer = 2
-	collision_mask = 1
+	collision_mask = 1 | 4      # камни, изгородь и вода
 	var cs := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
 	cap.radius = 0.42
@@ -581,6 +591,8 @@ func _physics_process(delta: float) -> void:
 
 	_attack_cd -= delta
 	_aim_hold -= delta
+	ammo = minf(MAX_AMMO, ammo + delta / float(RELOAD.get(hero, 0.7)))
+	dash_cd = maxf(0.0, dash_cd - delta)
 	_since_hit += delta
 	reveal_t -= delta
 	if _since_hit > 3.0:
@@ -595,6 +607,15 @@ func _physics_process(delta: float) -> void:
 			_sword.rotation.x = 0.7
 			create_tween().tween_property(_sword, "rotation:x", 0.0, 0.3)
 			main.ground_slam(self, global_position, 3.2, 42.0 * dmg_mult)
+		return
+	if _dash_t > 0.0:                                 # рывок
+		_dash_t -= delta
+		velocity = _dash_dir * 17.0
+		move_and_slide()
+		position.y = 0.0
+		in_bush = main.is_bush(global_position)
+		main.fx_burst(global_position + Vector3(0, 0.3, 0), Color(0.85, 0.8, 0.75, 0.7), 2, 1.0, 0.12, 0.3, 0.5)
+		_hp_fill.scale.x = maxf(0.001, hp / max_hp)
 		return
 	if is_player and not autopilot:
 		move_dir = main.get_player_move()
@@ -696,6 +717,10 @@ func try_attack(aim: Vector3) -> bool:
 	if not alive or _attack_cd > 0.0 or _leap_t > 0.0:
 		return false
 	var bot := not is_player or autopilot
+	if not bot:
+		if ammo < 1.0:
+			return false
+		ammo -= 1.0
 	facing = _flat(aim)
 	_aim_hold = 0.35
 	_swing()
@@ -712,7 +737,27 @@ func try_attack(aim: Vector3) -> bool:
 		_:
 			_attack_cd = 1.15 if bot else 0.45
 			_spawn_wave(facing, 20.0, 0.6)
+	if not bot:
+		_attack_cd = float(BURST_CD.get(hero, 0.3))
 	main.sfx("swing", global_position, 0.0 if is_player else -4.0)
+	if is_player:
+		main._tut_attacks += 1
+	return true
+
+
+## Рывок игрока: короткий бросок туда, куда идёт (или смотрит) герой.
+func try_dash() -> bool:
+	if not alive or dash_cd > 0.0 or _leap_t > 0.0 or _dash_t > 0.0:
+		return false
+	_dash_dir = move_dir.normalized() if move_dir.length() > 0.15 else facing
+	_dash_dir.y = 0.0
+	_dash_t = 0.17
+	dash_cd = DASH_CD
+	facing = _dash_dir
+	if is_player:
+		main._tut_dash = true
+	main.sfx("swing", global_position, -3.0)
+	main.fx_ring(global_position, Color(0.9, 0.85, 0.8), 1.4, 0.3)
 	return true
 
 
@@ -746,6 +791,7 @@ func try_super(aim: Vector3) -> bool:
 	main.sfx("super", global_position)
 	if is_player:
 		main.note("supers")
+		main._tut_super = true
 	main.fx_ring(global_position, main.team_colors[team], 3.4, 0.4)
 	main.fx_burst(global_position + Vector3(0, 0.9, 0), Color(1, 0.9, 0.5), 18, 6.0, 0.07, 0.45, -4.0)
 	if is_player:
@@ -786,6 +832,7 @@ func _die() -> void:
 	visible = false
 	collision_layer = 0
 	_leap_t = 0.0
+	_dash_t = 0.0
 	_respawn_t = 3.0
 	main.sfx("death", global_position)
 	var debris := Color(0.62, 0.64, 0.7)
@@ -807,6 +854,9 @@ func _respawn() -> void:
 	_visual.scale = Vector3.ONE
 	_visual.position.y = 0.0
 	_aware_t = 0.0
+	ammo = MAX_AMMO
+	dash_cd = 0.0
+	_dash_t = 0.0
 	main.fx_ring(spawn_pos, main.team_colors[team], 1.8, 0.5)
 	main.fx_burst(spawn_pos + Vector3(0, 0.3, 0), (main.team_colors[team] as Color).lightened(0.5), 14, 3.0, 0.06, 0.7, 3.0)
 	if is_player:
@@ -862,7 +912,7 @@ func _think(delta: float) -> void:
 		if chase and (role == "defend" or global_position.distance_to(chase.global_position) < 9.0):
 			_go(chase.global_position)
 			return
-	if hp < 35.0 and not has_flag:
+	if hp < max_hp * 0.35 and not has_flag:
 		_go(home)
 		return
 	if main.mode == "charge" and (carried >= 3 or (carried > 0 and main.batteries.is_empty())):

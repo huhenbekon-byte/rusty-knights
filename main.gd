@@ -9,14 +9,16 @@ const TouchButtonScript = preload("res://touch_button.gd")
 const ScoreBarScript = preload("res://score_bar.gd")
 const MenuScript = preload("res://menu.gd")
 const IconScript = preload("res://icon.gd")
+const AmmoBarScript = preload("res://ammo_bar.gd")
+const HERO_ICON := {"knight": "ic_sword", "archer": "ic_bow", "hammer": "ic_hammer", "mage": "ic_fire"}
 
 const HALF_W := 12.0
 const HALF_L := 20.0
 const MAX_BATTERIES := 8
 const CAM_OFFSET := Vector3(0, 11.5, 5.5)
 
-# Карта верхней половины (24 x 20). Нижняя половина — зеркальная.
-# '#' — каменный блок, 'b' — куст, '.' — трава
+# Карты верхней половины (24 x 20). Нижняя половина — зеркальная.
+# '#' — каменный блок, 'b' — куст, 'w' — вода (не пройти, но стрелы летят над ней), '.' — пол
 const MAP_TOP := [
 	"bbbb................bbbb",
 	"bb....................bb",
@@ -39,6 +41,92 @@ const MAP_TOP := [
 	"........##....##........",
 	"........#......#........",
 ]
+
+const MAP_FLOOD := [
+	"bbb..................bbb",
+	"bb....................bb",
+	"........................",
+	"........................",
+	"..www..............www..",
+	"..www..#........#..www..",
+	".......#........#.......",
+	"bb....................bb",
+	"bbb....##......##....bbb",
+	"........................",
+	"....bb....wwww....bb....",
+	"....bb....wwww....bb....",
+	"........................",
+	"##....b..........b....##",
+	"#....bbb........bbb....#",
+	"........................",
+	"...ww....##..##....ww...",
+	"...ww..............ww...",
+	"bb.......b....b.......bb",
+	"bbb......b....b......bbb",
+]
+
+const ARENAS := [
+	{"name": "Двор замка", "map": MAP_TOP, "floor": Color(0.5, 0.48, 0.48), "stone": Color(1.0, 0.96, 1.04)},
+	{"name": "Затопленный двор", "map": MAP_FLOOD, "floor": Color(0.44, 0.46, 0.5), "stone": Color(0.9, 1.0, 1.05)},
+]
+
+## Каменный блок: верх — плитка stone_top (повёрнута случайно), стенки — одна из четырёх
+## плиток атласа stone_side (по блоку случайно). size — размер блока в метрах.
+const STONE_SHADER := """
+shader_type spatial;
+render_mode diffuse_toon, specular_disabled;
+uniform sampler2D top_tex : source_color, filter_linear_mipmap;
+uniform sampler2D side_tex : source_color, filter_linear_mipmap;
+uniform vec3 size = vec3(1.0, 1.2, 1.0);
+uniform vec3 tint = vec3(1.0);
+varying vec3 lv;
+varying vec3 ln;
+varying vec3 cen;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+void vertex() {
+	lv = VERTEX;
+	ln = NORMAL;
+	cen = MODEL_MATRIX[3].xyz;
+}
+void fragment() {
+	vec3 rep = max(vec3(1.0), round(size));
+	vec3 q = (lv / size + 0.5) * rep;
+	vec3 col;
+	if (ln.y > 0.5) {
+		vec2 uv0 = q.xz;
+		vec2 uv = fract(uv0);
+		float r = floor(hash(floor(cen.xz * 2.0) + floor(uv0) * 7.0) * 4.0);
+		if (r == 1.0) uv = vec2(1.0 - uv.y, uv.x);
+		else if (r == 2.0) uv = 1.0 - uv;
+		else if (r == 3.0) uv = vec2(uv.y, 1.0 - uv.x);
+		col = textureGrad(top_tex, uv, dFdx(uv0), dFdy(uv0)).rgb;
+	} else {
+		vec2 uv0 = abs(ln.x) > 0.5 ? vec2(q.z, q.y) : vec2(q.x, q.y);
+		vec2 cell = floor(uv0);
+		vec2 uv = fract(uv0);
+		uv.y = 1.0 - uv.y;
+		float k = floor(hash(floor(cen.xz * 2.0) + cell * 3.1 + ln.xz * 5.0) * 4.0);
+		vec2 off = vec2(mod(k, 2.0), floor(k / 2.0)) * 0.5;
+		uv = off + clamp(uv, 0.004, 0.996) * 0.5;
+		col = textureGrad(side_tex, uv, dFdx(uv0) * 0.5, dFdy(uv0) * 0.5).rgb * 0.9;
+	}
+	ALBEDO = col * tint;
+}
+"""
+
+const WATER_SHADER := """
+shader_type spatial;
+render_mode unshaded;
+varying vec3 wp;
+void vertex() { wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
+void fragment() {
+	float w = sin(wp.x * 2.6 + TIME * 1.4) * sin(wp.z * 2.1 - TIME * 1.1)
+		+ 0.5 * sin((wp.x + wp.z) * 4.0 + TIME * 2.3);
+	vec3 deep = vec3(0.16, 0.42, 0.72);
+	vec3 light = vec3(0.42, 0.74, 0.95);
+	ALBEDO = mix(deep, light, smoothstep(0.15, 1.2, w));
+}
+"""
 
 var team_colors := [Color(0.22, 0.52, 1.0), Color(0.95, 0.25, 0.22)]
 var stations := [Vector3(0, 0, HALF_L - 3.0), Vector3(0, 0, -HALF_L + 3.0)]
@@ -70,6 +158,9 @@ var _camera: Camera3D
 var _joystick
 var _attack_btn
 var _super_btn
+var _dash_btn
+var _ammo_bar
+var _exit_box: Control
 var _score_bar
 var _info: Label
 var _result: Control
@@ -87,42 +178,82 @@ var _menu: Control
 var shake_on := true
 var mode := "charge"
 var match_stats := {"crystals": 0, "kos": 0, "hits": 0, "supers": 0}
+var arena: Dictionary = ARENAS[0]
+
+# обучение в первом бою
+var tutorial := false
+var _tut_step := 0
+var _tut_t := 0.0
+var _tut_moved := 0.0
+var _tut_attacks := 0
+var _tut_super := false
+var _tut_dash := false
 
 
 func _ready() -> void:
 	randomize()
-	for tex_name in ["floor", "stone", "leaves", "bushes", "props", "plate_center", "plate_station"]:
+	for tex_name in ["floor", "stone_top", "stone_side", "leaves", "bushes", "props", "plate_center", "plate_station"]:
 		_tex[tex_name] = load("res://%s.png" % tex_name)
-	_grid = MAP_TOP.duplicate()
-	for i in range(MAP_TOP.size() - 1, -1, -1):
-		var src: String = MAP_TOP[i]
-		var rev := ""
-		for j in range(src.length() - 1, -1, -1):
-			rev += src[j]
-		_grid.append(rev)
 	_load_settings()
 	mode = str(Profile.data.mode)
 	if not Profile.mode_unlocked(mode):
 		mode = "charge"
+	# тестовый запуск сразу в бой: -- --play=режим:герой (профиль не сохраняется)
+	var play := _arg("--play=")
+	if play != "":
+		var parts := play.split(":")
+		mode = parts[0]
+		if parts.size() > 1:
+			Profile.data.hero = parts[1]
+		in_game = true
+	# обучение — в самом первом бою (или по кнопке в настройках)
+	tutorial = in_game and (not bool(Profile.data.get("tutorial_done", false)) or "--tutorial" in OS.get_cmdline_user_args())
+	if play != "" and not ("--tutorial" in OS.get_cmdline_user_args()):
+		tutorial = false
+	if tutorial:
+		mode = "charge"
+	# арены по очереди от боя к бою; за меню — случайная
+	var ai := randi() % ARENAS.size()
+	if in_game:
+		ai = int(Profile.data.get("arena_i", 0)) % ARENAS.size()
+		if not tutorial:
+			Profile.data.arena_i = ai + 1
+		else:
+			ai = 0
+	if _arg("--arena=") != "":
+		ai = int(_arg("--arena=")) % ARENAS.size()
+	arena = ARENAS[ai]
+	var top: Array = arena.map
+	_grid = top.duplicate()
+	for i in range(top.size() - 1, -1, -1):
+		var src: String = top[i]
+		var rev := ""
+		for j in range(src.length() - 1, -1, -1):
+			rev += src[j]
+		_grid.append(rev)
 	win_score = 3 if mode == "flag" else 10
 	_build_world()
 	_build_arena()
 	_spawn_knights()
+	if tutorial:                                  # в обучении враги бьют слабее
+		for k in knights:
+			if k.team != 0:
+				k.dmg_mult *= 0.6
 	if mode == "flag":
 		_spawn_flags()
 	_build_ui()
 	_setup_audio()
-	var shots := _shots_dir()
+	var shots := _arg("--shots=")
 	if shots != "":
 		_setup_screenshots(shots)
 	elif not in_game:
 		_open_menu()
 
 
-func _shots_dir() -> String:
+func _arg(prefix: String) -> String:
 	for a in OS.get_cmdline_user_args():
-		if a.begins_with("--shots="):
-			return a.substr(8)
+		if a.begins_with(prefix):
+			return a.substr(prefix.length())
 	return ""
 
 
@@ -130,6 +261,31 @@ func _shots_dir() -> String:
 ## Кадр 1 — главное меню, кадры 2–3 — бой (игрок под управлением бота).
 func _setup_screenshots(dir: String) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
+	var tab := _arg("--tab=")
+	if tab != "":                                   # снимок одной вкладки меню
+		_open_menu()
+		_menu.show_page(tab)
+		await get_tree().create_timer(2.0).timeout
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("%s/tab_%s.png" % [dir, tab])
+		get_tree().quit()
+		return
+	if in_game:                                     # тестовый бой: сразу в бой, игрок — бот
+		player.autopilot = true
+		if _arg("--nohud") != "" or "--nohud" in OS.get_cmdline_user_args():
+			_hud.visible = false
+		var secs := float(_arg("--secs=")) if _arg("--secs=") != "" else 30.0
+		var t_list := [secs * 0.17, secs * 0.4, secs * 0.67, secs]
+		for i in t_list.size():
+			await get_tree().create_timer(t_list[i] - (t_list[i - 1] if i > 0 else 0.0)).timeout
+			if DisplayServer.get_name() != "headless":   # без экрана кадр не сохранить
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png("%s/play_%d.png" % [dir, i + 1])
+			print("score ", score, " game_over ", game_over)
+		if game_over:
+			print("winner shown")
+		get_tree().quit()
+		return
 	_open_menu()
 	var times := [3.0, 9.0, 16.0]
 	for i in times.size():
@@ -293,7 +449,7 @@ func _build_arena() -> void:
 	# пол: атлас 4x4 плитки = 4 м
 	# пол: плитка песчаника (картинка 3:2 ≈ 6 x 4 м), шире арены — под декорациями тоже пол
 	# светлая плитка под ярким светом выгорает в белый — приглушаем, чтобы цвет был как на картинке
-	var floor_mat := _textured("floor", Color(0.6, 0.58, 0.58), 1.0)
+	var floor_mat := _textured("floor", arena.floor, 1.0)
 	if _tex["floor"] == null:
 		push_warning("floor.png не найден — загрузи его в репозиторий")
 	floor_mat.uv1_scale = Vector3(1.0 / 6.0, 1.0 / 6.0, 1.0 / 4.0)
@@ -308,7 +464,12 @@ func _build_arena() -> void:
 	_box(Vector3(HALF_W + 0.5, hh / 2, 0), Vector3(1, hh, HALF_L * 2), hedge)
 
 	# блоки и кусты по карте
-	var stone := _textured("stone", Color.WHITE, 0.5)     # атлас 2x2 = 2 м
+	var stone := _stone_mat(Vector3(1, 1.2, 1))
+	var water_mat := ShaderMaterial.new()
+	var wsh := Shader.new()
+	wsh.code = WATER_SHADER
+	water_mat.shader = wsh
+	var rim := toon(Color(0.42, 0.4, 0.46))
 	_bush_mat = _textured("leaves", Color(0.7, 0.8, 0.7), 1.0)
 	_bush_mat_seen = _bush_mat.duplicate() as StandardMaterial3D
 	_bush_mat_seen.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -323,6 +484,25 @@ func _build_arena() -> void:
 			match line[col]:
 				"#":
 					_box(p + Vector3(0, 0.6, 0), Vector3(1, 1.2, 1), stone)
+				"w":
+					# вода: героев не пускает (слой 4), снаряды пролетают (они видят только слой 1)
+					_box(p + Vector3(0, 0.03, 0), Vector3(1, 0.04, 1), water_mat, false)
+					var body := StaticBody3D.new()
+					body.collision_layer = 4
+					body.collision_mask = 0
+					var cs := CollisionShape3D.new()
+					var shape := BoxShape3D.new()
+					shape.size = Vector3(1, 2, 1)
+					cs.shape = shape
+					body.add_child(cs)
+					body.position = p + Vector3(0, 1, 0)
+					add_child(body)
+					# каменный бортик там, где вода граничит с полом
+					for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+						if _cell(col + d.x, row + d.y) != "w":
+							var off := Vector3(d.x * 0.47, 0.06, d.y * 0.47)
+							var sz := Vector3(0.08 if d.x != 0 else 1.0, 0.12, 0.08 if d.y != 0 else 1.0)
+							_box(p + off, sz, rim, false)
 				"b":
 					# низкое основание из листвы + нарисованный куст-спрайт, повёрнутый к камере
 					var m := _box(p + Vector3(0, 0.15, 0), Vector3(0.98, 0.3, 0.98), _bush_mat, false)
@@ -358,8 +538,8 @@ func _build_arena() -> void:
 		glow.material_override = toon(col, true)
 		add_child(glow)
 		for dx in [-1.5, 1.5]:
-			_box(s + Vector3(dx, 1.2, 1.7 * back), Vector3(0.45, 2.4, 0.45), stone)
-		_box(s + Vector3(0, 2.55, 1.7 * back), Vector3(3.5, 0.4, 0.5), stone)
+			_box(s + Vector3(dx, 1.2, 1.7 * back), Vector3(0.45, 2.4, 0.45), _stone_mat(Vector3(0.45, 2.4, 0.45)))
+		_box(s + Vector3(0, 2.55, 1.7 * back), Vector3(3.5, 0.4, 0.5), _stone_mat(Vector3(3.5, 0.4, 0.5)))
 		_box(s + Vector3(0, 1.7, 1.7 * back), Vector3(1.2, 1.3, 0.06), toon(col), false)
 	_build_decor()
 
@@ -451,6 +631,48 @@ func _build_decor() -> void:
 	for c in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
 		_prop(19, Vector3((HALF_W + 2.2) * c.x, 0, (HALF_L + 1.0) * c.y))
 		_prop(13, Vector3((HALF_W + 1.3) * c.x, 0, (HALF_L + 0.2) * c.y), 0.9)
+
+
+var _stone_mats := {}
+var _stone_shader: Shader
+
+
+func _stone_mat(size: Vector3) -> ShaderMaterial:
+	var key := str(size)
+	if not _stone_mats.has(key):
+		if _stone_shader == null:
+			_stone_shader = Shader.new()
+			_stone_shader.code = STONE_SHADER
+		var m := ShaderMaterial.new()
+		m.shader = _stone_shader
+		m.set_shader_parameter("top_tex", _tex["stone_top"])
+		m.set_shader_parameter("side_tex", _tex["stone_side"])
+		m.set_shader_parameter("size", size)
+		var t: Color = arena.stone
+		m.set_shader_parameter("tint", Vector3(t.r, t.g, t.b))
+		_stone_mats[key] = m
+	return _stone_mats[key]
+
+
+func _cell(col: int, row: int) -> String:
+	if row < 0 or row >= _grid.size():
+		return "#"
+	var line: String = _grid[row]
+	if col < 0 or col >= line.length():
+		return "#"
+	return line[col]
+
+
+## Свободное место рядом с точкой (не в камне и не в воде) — туда падают монеты.
+func _free_spot(p: Vector3) -> Vector3:
+	for r in 4:
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				var q := p + Vector3(dx, 0, dz)
+				var c := _cell(int(floor(q.x + HALF_W)), int(floor(q.z + HALF_L)))
+				if c == "." or c == "b":
+					return Vector3(floor(q.x + HALF_W) - HALF_W + 0.5, 0, floor(q.z + HALF_L) - HALF_L + 0.5)
+	return Vector3.ZERO
 
 
 func is_bush(pos: Vector3) -> bool:
@@ -575,25 +797,64 @@ func _build_ui() -> void:
 
 	_info = _label(30, Color(1, 0.97, 0.8))
 	_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_anchor(_info, 0, 0, 1, 0, 30, 130, -30, 230)
+	_anchor(_info, 0, 0, 1, 0, 112, 160, -112, 270)
 	root.add_child(_info)
+
+	if in_game:                                    # название арены в начале боя
+		var an := _label(54, Color(1, 0.85, 0.4), arena.name)
+		_anchor(an, 0, 0.3, 1, 0.3, 0, -50, 0, 50)
+		root.add_child(an)
+		var sub := _label(28, Color(0.9, 0.9, 1.0), "ОБУЧЕНИЕ" if tutorial else str(Profile.MODES[mode].name))
+		_anchor(sub, 0, 0.3, 1, 0.3, 0, 40, 0, 90)
+		root.add_child(sub)
+		var tw := create_tween().set_parallel(true)
+		for l in [an, sub]:
+			tw.tween_property(l, "modulate:a", 0.0, 0.6).set_delay(2.2)
+		tw.chain().tween_callback(func():
+			an.queue_free()
+			sub.queue_free())
 
 	_joystick = JoystickScript.new()
 	_anchor(_joystick, 0, 0.45, 0.6, 1, 0, 0, 0, 0)
 	root.add_child(_joystick)
 
+	var hero_icon: Texture2D = load("res://%s.png" % HERO_ICON.get(str(player.hero), "ic_sword"))
 	_attack_btn = TouchButtonScript.new()
-	_attack_btn.icon = "sword"
-	_attack_btn.color = Color(0.95, 0.5, 0.18)
-	_anchor(_attack_btn, 1, 1, 1, 1, -260, -330, -50, -120)
+	_attack_btn.frame = load("res://ui_btn.png")
+	_attack_btn.icon_tex = hero_icon
+	_anchor(_attack_btn, 1, 1, 1, 1, -250, -340, -30, -120)
 	root.add_child(_attack_btn)
 
+	_ammo_bar = AmmoBarScript.new()
+	_ammo_bar.icon_tex = hero_icon
+	_anchor(_ammo_bar, 1, 1, 1, 1, -280, -108, -14, -36)
+	root.add_child(_ammo_bar)
+
 	_super_btn = TouchButtonScript.new()
-	_super_btn.icon = "star"
-	_super_btn.color = Color(1.0, 0.8, 0.15)
-	_anchor(_super_btn, 1, 1, 1, 1, -370, -510, -230, -370)
+	_super_btn.frame = load("res://ui_btn_ult.png")
+	_super_btn.icon_tex = hero_icon
+	_super_btn.tag = "ULT"
+	_anchor(_super_btn, 1, 1, 1, 1, -420, -520, -244, -344)
 	_super_btn.pressed.connect(_on_super)
 	root.add_child(_super_btn)
+
+	_dash_btn = TouchButtonScript.new()
+	_dash_btn.frame = load("res://ui_btn_small.png")
+	_dash_btn.icon_tex = load("res://ic_dash.png")
+	_anchor(_dash_btn, 1, 1, 1, 1, -186, -506, -50, -370)
+	_dash_btn.pressed.connect(_on_dash)
+	root.add_child(_dash_btn)
+
+	# джойстик не перехватывает касания по кнопкам
+	_joystick.blockers = [_attack_btn, _super_btn, _dash_btn]
+
+	var exit_btn := TouchButtonScript.new()
+	exit_btn.frame = load("res://ui_btn_small.png")
+	exit_btn.icon_tex = load("res://ic_back.png")
+	_anchor(exit_btn, 0, 0, 0, 0, 14, 128, 104, 218)
+	exit_btn.pressed.connect(_ask_exit)
+	root.add_child(exit_btn)
+	_joystick.blockers.append(exit_btn)
 
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.6)
@@ -623,6 +884,8 @@ func _update_ui() -> void:
 		_info.text = ""
 	elif not player.alive:
 		_info.text = "Возрождение... %d" % int(ceil(player.respawn_left()))
+	elif tutorial and _tut_step < 6:
+		_info.text = _tutorial_text()
 	elif player.carried > 0:
 		_info.text = "Бронзовых монет с собой: %d. Неси к синему знамени!" % player.carried
 	elif player.has_flag:
@@ -641,7 +904,15 @@ func _update_ui() -> void:
 		_info.text = ""
 	_super_btn.fill = player.super_charge
 	_super_btn.enabled = player.super_charge >= 1.0
+	_super_btn.glow = _super_btn.enabled
 	_super_btn.queue_redraw()
+	_dash_btn.fill = 1.0 - player.dash_cd / player.DASH_CD
+	_dash_btn.enabled = player.dash_cd <= 0.0
+	_dash_btn.queue_redraw()
+	_attack_btn.enabled = player.ammo >= 1.0
+	_attack_btn.queue_redraw()
+	_ammo_bar.ammo = player.ammo
+	_ammo_bar.queue_redraw()
 
 
 # ---------------------------------------------------------------- игровой цикл
@@ -650,6 +921,8 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_E:
 			_super_key = true
+		elif event.physical_keycode == KEY_SHIFT:
+			_on_dash()
 
 
 func _process(delta: float) -> void:
@@ -691,9 +964,66 @@ func _process(delta: float) -> void:
 			_spawn_battery(Vector3(cos(a) * rad, 0, sin(a) * rad))
 
 	_handle_player_combat()
+	if tutorial:
+		_update_tutorial(delta)
 	_handle_pickups()
 	if mode == "flag":
 		_update_flags(delta)
+
+
+## Шаги обучения: ходьба → атака → супер → монеты → кусты.
+func _tutorial_text() -> String:
+	match _tut_step:
+		0:
+			return "Двигай джойстик слева — так ходит твой герой"
+		1:
+			return "Жми большую кнопку справа — атака! (%d/3)" % mini(_tut_attacks, 3)
+		2:
+			return "Кнопка с бегущим человечком — рывок. Попробуй!"
+		3:
+			return "Ульта готова! Жми светящуюся кнопку ULT — мощный удар"
+		4:
+			return "Подбирай бронзовые монеты в центре и неси к синему знамени"
+		_:
+			return "В кустах тебя не видно. Первыми сдайте 10 монет — победа!"
+
+
+func _update_tutorial(delta: float) -> void:
+	_tut_t += delta
+	var next := false
+	match _tut_step:
+		0:
+			if player.alive:
+				_tut_moved += Vector2(player.velocity.x, player.velocity.z).length() * delta
+			next = _tut_moved > 4.0
+		1:
+			next = _tut_attacks >= 3
+		2:
+			next = _tut_dash or _tut_t > 20.0
+		3:
+			next = _tut_super or _tut_t > 25.0
+		4:
+			next = score[0] > 0 or _tut_t > 40.0
+		5:
+			next = _tut_t > 7.0
+	if next:
+		_tut_step += 1
+		_tut_t = 0.0
+		if _tut_step < 6:
+			sfx("ready")
+		if _tut_step == 3:                          # дарим полный супер, чтобы попробовать
+			player.super_charge = 1.0
+	# подсвечиваем нужную кнопку
+	var pulse := 1.0 + 0.1 * sin(Time.get_ticks_msec() * 0.01)
+	for b in [_attack_btn, _dash_btn, _super_btn]:
+		b.pivot_offset = b.size / 2.0
+		b.scale = Vector2.ONE
+	if _tut_step == 1:
+		_attack_btn.scale = Vector2(pulse, pulse)
+	elif _tut_step == 2:
+		_dash_btn.scale = Vector2(pulse, pulse)
+	elif _tut_step == 3:
+		_super_btn.scale = Vector2(pulse, pulse)
 
 
 func _handle_player_combat() -> void:
@@ -711,6 +1041,46 @@ func _player_aim() -> Vector3:
 	if e:
 		return e.global_position - player.global_position
 	return player.facing
+
+
+func _on_dash() -> void:
+	if player.alive and not game_over:
+		player.try_dash()
+
+
+## Кнопка «назад» в бою: спросить, точно ли выйти (выход — поражение).
+func _ask_exit() -> void:
+	if game_over or _exit_box:
+		return
+	sfx("click")
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_anchor(dim, 0, 0, 1, 1, 0, 0, 0, 0)
+	_hud.add_child(dim)
+	_exit_box = dim
+	var l := _label(46, Color.WHITE, "Выйти из боя?")
+	_anchor(l, 0, 0.36, 1, 0.36, 0, -60, 0, 0)
+	dim.add_child(l)
+	var sub := _label(26, Color(1, 0.8, 0.75), "" if tutorial else "Выход засчитается как поражение")
+	_anchor(sub, 0, 0.36, 1, 0.36, 0, 0, 0, 44)
+	dim.add_child(sub)
+	var yes := _make_button("ВЫЙТИ", Color(0.72, 0.16, 0.18), 40)
+	_anchor(yes, 0.5, 0.5, 0.5, 0.5, -300, 0, -20, 110)
+	dim.add_child(yes)
+	var no := _make_button("ОСТАТЬСЯ", Color(0.3, 0.6, 0.38), 40)
+	_anchor(no, 0.5, 0.5, 0.5, 0.5, 20, 0, 300, 110)
+	dim.add_child(no)
+	no.pressed.connect(func():
+		dim.queue_free()
+		_exit_box = null)
+	yes.pressed.connect(func():
+		if tutorial:
+			Profile.data.tutorial_done = true
+			Profile.save()
+		elif in_game:
+			Profile.match_result(false, match_stats)
+		go_to_menu())
 
 
 func _on_super() -> void:
@@ -749,9 +1119,10 @@ func _handle_pickups() -> void:
 func _end_game(winner: int) -> void:
 	game_over = true
 	if not in_game:                 # бой ботов за меню — просто начинаем заново
-		await get_tree().create_timer(2.5).timeout
-		get_tree().reload_current_scene()
+		get_tree().create_timer(2.5).timeout.connect(_restart_background)
 		return
+	if tutorial:
+		Profile.data.tutorial_done = true
 	var win: bool = winner == player.team
 	var res := Profile.match_result(win, match_stats)
 	_result.visible = true
@@ -1125,7 +1496,7 @@ func on_knight_died(k, killer = null) -> void:
 		var p: Vector3 = k.global_position + Vector3(randf_range(-1.2, 1.2), 0, randf_range(-1.2, 1.2))
 		p.x = clampf(p.x, -HALF_W + 0.8, HALF_W - 0.8)
 		p.z = clampf(p.z, -HALF_L + 0.8, HALF_L - 0.8)
-		_spawn_battery(p)
+		_spawn_battery(_free_spot(p))
 
 
 # ---------------------------------------------------------------- эффекты
@@ -1267,6 +1638,11 @@ func _open_menu() -> void:
 	_menu = MenuScript.new()
 	_menu.main = self
 	layer.add_child(_menu)
+
+
+func _restart_background() -> void:
+	if not in_game and is_inside_tree():
+		get_tree().reload_current_scene()
 
 
 func start_match() -> void:

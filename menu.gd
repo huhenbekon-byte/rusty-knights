@@ -404,7 +404,8 @@ func _mode_card(vb: VBoxContainer, id: String) -> void:
 	var chip := _panel(card, Rect2(card.size.x / 2 - 80, 160, 160, 46), Color(0.06, 0.06, 0.14, 0.92), INK, 3)
 	_icon(chip, "people", Rect2(14, 5, 36, 36))
 	_lbl(chip, "3 на 3", 24, Color.WHITE, Rect2(54, 0, 100, 46), HORIZONTAL_ALIGNMENT_LEFT)
-	_lbl(card, m.desc, 21, Color(0.85, 0.85, 1.0), Rect2(16, 206, card.size.x - 32, 48))
+	var dl := _lbl(card, m.desc, 19, Color(0.85, 0.85, 1.0), Rect2(16, 200, card.size.x - 32, 58))
+	dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if sel:
 		_icon(card, "check", Rect2(card.size.x - 74, 16, 56, 56))
 	if not unlocked:
@@ -449,10 +450,10 @@ func _page_heroes(col: Control) -> void:
 	vp.msaa_3d = Viewport.MSAA_2X
 	svc.add_child(vp)
 	var cam := Camera3D.new()
-	cam.position = Vector3(0, 1.25, 3.0)
-	cam.fov = 40
+	cam.position = Vector3(0, 1.5, 4.3)
+	cam.fov = 36
 	vp.add_child(cam)
-	cam.look_at(Vector3(0, 0.95, 0))
+	cam.look_at(Vector3(0, 0.62, 0))
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-40, 30, 0)
 	sun.light_energy = 1.2
@@ -794,11 +795,16 @@ func _toggle_btn(box: Control, text: String, key: String, y: float) -> void:
 
 
 func _open_settings() -> void:
-	var box := _popup("Настройки", 560)
+	var box := _popup("Настройки", 640)
 	_toggle_btn(box, "Звук", "sound", 70)
 	_toggle_btn(box, "Музыка", "music", 160)
 	_toggle_btn(box, "Тряска камеры", "shake", 250)
-	var r := _btn(box, "Сбросить прогресс", Color(0.75, 0.25, 0.22), Rect2(80, 370, 400, 72), 28)
+	var tb := _btn(box, "Пройти обучение", Color(0.3, 0.5, 0.8), Rect2(80, 350, 400, 72), 28)
+	tb.pressed.connect(func():
+		Profile.data.tutorial_done = false
+		_close_popup()
+		main.start_match())
+	var r := _btn(box, "Сбросить прогресс", Color(0.75, 0.25, 0.22), Rect2(80, 450, 400, 72), 28)
 	r.pressed.connect(func():
 		var c := _popup("Точно сбросить?", 380)
 		_lbl(c, "Монеты, кубки, облики и задания\nпропадут навсегда.", 24, Color(0.9, 0.9, 1.0), Rect2(0, 60, 560, 110))
@@ -810,7 +816,7 @@ func _open_settings() -> void:
 			_close_popup()
 			show_page("home"))
 		no.pressed.connect(_close_popup))
-	_lbl(box, "Ржавые Рыцари · версия 0.6", 20, Color(0.6, 0.6, 0.8), Rect2(0, 470, 560, 40))
+	_lbl(box, "Ржавые Рыцари · версия 0.9 альфа", 20, Color(0.6, 0.6, 0.8), Rect2(0, 550, 560, 40))
 
 
 func _open_profile() -> void:

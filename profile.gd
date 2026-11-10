@@ -69,7 +69,7 @@ const HERO_ORDER := ["knight", "archer", "hammer", "mage"]
 
 const MODES := {
 	"charge": {"name": "Казна", "desc": "Собирай бронзовые монеты в центре и неси в казну у знамени.", "trophies": 0},
-	"brawl": {"name": "Схватка", "desc": "Командный бой: первыми одолей 10 вражеских рыцарей.", "trophies": 30},
+	"brawl": {"name": "Схватка", "desc": "Командный бой: первыми одолей 10 вражеских героев.", "trophies": 30},
 	"flag": {"name": "Захват знамени", "desc": "Укради вражеское знамя и принеси к своему. До 3 очков.", "trophies": 60},
 }
 const MODE_ORDER := ["charge", "brawl", "flag"]
@@ -125,6 +125,8 @@ func _defaults() -> Dictionary:
 		"road_claimed": [],
 		"free_chest_at": 0.0,
 		"settings": {"sound": true, "music": true, "shake": true},
+		"tutorial_done": false,
+		"arena_i": 0,
 	}
 
 
@@ -144,6 +146,9 @@ func load_data() -> void:
 					data.skin["knight"] = parsed[k]
 				else:
 					data[k] = parsed[k]
+			# старые игроки, у которых уже есть кубки, обучение не проходят
+			if not parsed.has("tutorial_done") and int(data.trophies) > 0:
+				data.tutorial_done = true
 	ensure_quests()
 
 

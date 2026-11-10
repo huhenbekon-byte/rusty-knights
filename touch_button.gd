@@ -1,15 +1,18 @@
 extends Control
-## Круглая сенсорная кнопка с иконкой («sword», «star») или текстом.
+## Круглая сенсорная кнопка в стиле «металл и красное дерево»: рамка с шипами (frame),
+## серебряный значок (icon_tex), кольцо заряда (fill), подпись-табличка (tag, например «ULT»).
 ## Работает одновременно с джойстиком (мультитач).
 
 signal pressed
 
-var label_text := ""
-var icon := ""
-var color := Color.WHITE
-var fill := 1.0        # заполнение кольца (заряд супера)
+var frame: Texture2D
+var icon_tex: Texture2D
+var tag := ""            # табличка под кнопкой
+var glow := false        # красное свечение, когда кнопка готова («ульта»)
+var fill := 1.0          # заполнение кольца (заряд, перезарядка)
 var enabled := true
 var _touch := -1
+var _press_t := 0.0
 
 
 func _ready() -> void:
@@ -20,6 +23,12 @@ func is_held() -> bool:
 	return _touch != -1
 
 
+func _process(delta: float) -> void:
+	_press_t = maxf(0.0, _press_t - delta)
+	if glow and enabled or _press_t > 0.0:
+		queue_redraw()
+
+
 func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		_touch = -1
@@ -27,6 +36,7 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		if event.pressed and _touch == -1 and _hit(event.position):
 			_touch = event.index
+			_press_t = 0.12
 			if enabled:
 				pressed.emit()
 			queue_redraw()
@@ -40,69 +50,53 @@ func _hit(p: Vector2) -> bool:
 	return p.distance_to(c) <= minf(size.x, size.y) * 0.5
 
 
-func _rot(points: Array, c: Vector2, a: float, s: float) -> PackedVector2Array:
-	var out := PackedVector2Array()
-	for p in points:
-		out.append(c + (p as Vector2).rotated(a) * s)
-	return out
-
-
-func _draw_sword(c: Vector2, s: float, col: Color) -> void:
-	var a := -PI / 4.0
-	var outline := Color(0.1, 0.07, 0.08)
-	var blade := [Vector2(-0.12, -0.15), Vector2(0.12, -0.15), Vector2(0.12, -0.8), Vector2(0, -0.98), Vector2(-0.12, -0.8)]
-	var guard := [Vector2(-0.38, -0.15), Vector2(0.38, -0.15), Vector2(0.38, 0.0), Vector2(-0.38, 0.0)]
-	var grip := [Vector2(-0.07, 0.0), Vector2(0.07, 0.0), Vector2(0.07, 0.4), Vector2(-0.07, 0.4)]
-	var off := Vector2(0, 0.28)
-	for part in [blade, guard, grip]:
-		var shifted := []
-		for p in part:
-			shifted.append(p + off)
-		var poly := _rot(shifted, c, a, s)
-		draw_colored_polygon(poly, outline)
-	for pair in [[blade, col], [guard, Color(1, 0.82, 0.3)], [grip, Color(0.5, 0.3, 0.18)]]:
-		var shifted2 := []
-		for p in pair[0]:
-			shifted2.append(p + off)
-		draw_colored_polygon(_rot(shifted2, c, a, s * 0.86), pair[1])
-	draw_circle(c + (Vector2(0, 0.72)).rotated(a) * s, s * 0.1, Color(1, 0.82, 0.3))
-
-
-func _draw_star(c: Vector2, s: float, col: Color) -> void:
-	var pts := PackedVector2Array()
-	for i in 10:
-		var r := s if i % 2 == 0 else s * 0.45
-		var ang := -PI / 2.0 + i * PI / 5.0
-		pts.append(c + Vector2(cos(ang), sin(ang)) * r)
-	var outer := PackedVector2Array()
-	for p in pts:
-		outer.append(c + (p - c) * 1.15)
-	draw_colored_polygon(outer, Color(0.1, 0.07, 0.08))
-	draw_colored_polygon(pts, col)
-
-
 func _draw() -> void:
 	var c := size * 0.5
 	var r := minf(size.x, size.y) * 0.5
-	var alpha := 0.95 if enabled else 0.5
-	var base := color
-	base.a = alpha * (0.95 if _touch != -1 else 0.75)
-	draw_circle(c, r, Color(0.08, 0.06, 0.1, 0.55 * alpha))
-	draw_circle(c, r - 6.0, base)
-	draw_circle(c + Vector2(0, -r * 0.12), r * 0.72, Color(1, 1, 1, 0.12 * alpha))
-	if fill < 1.0:
-		draw_arc(c, r - 5.0, 0.0, TAU, 48, Color(0, 0, 0, 0.35), 10.0)
-		if fill > 0.01:
-			draw_arc(c, r - 5.0, -PI / 2.0, -PI / 2.0 + TAU * fill, 48, Color(1, 1, 1, 0.95), 10.0)
+	var pressed_k := 0.94 if (_touch != -1 or _press_t > 0.0) else 1.0
+	var rr := r * pressed_k
+	var t := Time.get_ticks_msec() / 1000.0
+
+	# свечение готовой «ульты»: мягкие красные круги и вращающиеся дуги
+	if glow and enabled:
+		var pulse := 0.5 + 0.5 * sin(t * 4.0)
+		for i in 5:
+			draw_circle(c, rr * (1.02 + i * 0.07 + pulse * 0.04), Color(1.0, 0.12, 0.15, 0.09 - i * 0.015))
+		for i in 3:
+			var a0 := t * (1.6 + i * 0.5) + i * 2.1
+			draw_arc(c, rr * (0.52 + i * 0.07), a0, a0 + 2.0, 24, Color(1.0, 0.3, 0.3, 0.55), 4.0, true)
+
+	var mod := Color(1, 1, 1) if enabled else Color(0.55, 0.5, 0.52)
+	if frame:
+		draw_texture_rect(frame, Rect2(c - Vector2(rr, rr), Vector2(rr, rr) * 2.0), false, mod)
 	else:
-		draw_arc(c, r - 4.0, 0.0, TAU, 48, Color(1, 1, 1, alpha), 6.0)
-	var icol := Color(1, 1, 1, alpha)
-	match icon:
-		"sword":
-			_draw_sword(c, r * 0.62, icol)
-		"star":
-			_draw_star(c, r * 0.5, icol)
-		_:
-			var font := get_theme_default_font()
-			var fs := int(r * 0.3)
-			draw_string(font, Vector2(0, c.y + fs * 0.35), label_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, fs, icol)
+		draw_circle(c, rr * 0.8, Color(0.35, 0.06, 0.08))
+
+	# кольцо заряда по ободку
+	if fill < 1.0:
+		draw_arc(c, rr * 0.73, 0.0, TAU, 64, Color(0, 0, 0, 0.55), rr * 0.09, true)
+		if fill > 0.01:
+			draw_arc(c, rr * 0.73, -PI / 2.0, -PI / 2.0 + TAU * fill, 64, Color(1.0, 0.72, 0.3, 0.95), rr * 0.07, true)
+
+	if icon_tex:
+		var s := rr * 1.06
+		draw_texture_rect(icon_tex, Rect2(c - Vector2(s, s) * 0.5, Vector2(s, s)), false, mod)
+
+	if tag != "":
+		var font := get_theme_default_font()
+		var fs := int(r * 0.24)
+		var w := r * 0.78
+		var h := r * 0.34
+		var p := Vector2(c.x - w * 0.5, c.y + r * 0.78)
+		var pts := PackedVector2Array([p + Vector2(h * 0.35, 0), p + Vector2(w - h * 0.35, 0), p + Vector2(w, h * 0.5),
+			p + Vector2(w - h * 0.35, h), p + Vector2(h * 0.35, h), p + Vector2(0, h * 0.5)])
+		draw_colored_polygon(pts, Color(0.08, 0.04, 0.05))
+		var inner := PackedVector2Array()
+		var mid := p + Vector2(w, h) * 0.5
+		for q in pts:
+			inner.append(mid + (q - mid) * 0.82)
+		draw_colored_polygon(inner, Color(0.42, 0.07, 0.1) if enabled else Color(0.25, 0.2, 0.22))
+		var line := pts.duplicate()
+		line.append(pts[0])
+		draw_polyline(line, Color(0.75, 0.72, 0.75), 2.5, true)
+		draw_string(font, Vector2(p.x, p.y + h * 0.5 + fs * 0.36), tag, HORIZONTAL_ALIGNMENT_CENTER, w, fs, Color(1, 0.95, 0.95))
