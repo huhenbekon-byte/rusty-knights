@@ -2,7 +2,8 @@ extends Node3D
 ## Снаряд героя. kind:
 ##   wave  — волна меча рыцаря (светящийся серп),
 ##   arrow — стрела лучницы,
-##   wind  — «Стрела ветра» (супер лучницы): большая, пробивает всех на пути.
+##   wind  — «Стрела ветра» (супер лучницы): большая, пробивает всех на пути,
+##   slam  — ударная волна молота, fire — огненный шар мага (взрывается по площади).
 ## Гаснет о камень; кусты пропускают.
 
 var main     # главная сцена (main.gd)
@@ -16,6 +17,8 @@ var speed := 16.0
 var pierce := false
 var hit_radius := 0.65
 var charge := 0.12      # заряд супера за попадание
+var tint := Color(1.0, 0.55, 0.15)   # цвет огня мага (из облика)
+var _exploded := false
 var _hit := []          # кого уже задели (для пробивающих)
 var _trail_t := 0.0
 
@@ -77,6 +80,17 @@ func _ready() -> void:
 				var a := i * PI / 2.0
 				_piece(_box(Vector3(0.05, 0.05, 0.7)), Vector3(cos(a) * 0.22, sin(a) * 0.22, -0.1),
 					_glow_mat(c.lightened(0.3), 0.55, 2.0), Vector3(0, 0, a))
+		"fire":
+			var core := _glow_mat(tint.lightened(0.5), 1.0, 3.5)
+			var halo := _glow_mat(tint, 0.55, 2.5)
+			var s1 := SphereMesh.new()
+			s1.radius = 0.16
+			s1.height = 0.32
+			_piece(s1, Vector3.ZERO, core)
+			var s2 := SphereMesh.new()
+			s2.radius = 0.28
+			s2.height = 0.56
+			_piece(s2, Vector3.ZERO, halo)
 		"slam":
 			# ударная волна молота: широкая голубая дуга
 			var c := Color(0.45, 0.75, 1.0)
@@ -99,11 +113,19 @@ func _physics_process(delta: float) -> void:
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1)
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if not hit.is_empty():
+		if kind == "fire":
+			_explode()
+			return
 		main.sfx("wall", global_position, -7.0)
 		main.fx_burst(global_position, Color(0.6, 0.55, 0.9), 6, 2.5, 0.07, 0.35)
 		queue_free()
 		return
 	global_position = to
+	if kind == "fire":
+		_trail_t -= delta
+		if _trail_t <= 0.0:
+			_trail_t = 0.04
+			main.fx_burst(to, tint, 2, 0.8, 0.09, 0.3, 1.5)
 	if kind == "slam":
 		scale = scale.lerp(Vector3(1.5, 1, 1.5), delta * 6.0)
 	if kind == "wind":
@@ -117,6 +139,9 @@ func _physics_process(delta: float) -> void:
 		if k.alive and k.team != team and not (k in _hit):
 			var kp: Vector3 = k.global_position
 			if Vector2(kp.x - to.x, kp.z - to.z).length() < hit_radius:
+				if kind == "fire":
+					_explode()
+					return
 				k.take_damage(damage, shooter)
 				if is_instance_valid(shooter):
 					shooter.add_charge(charge)
@@ -127,4 +152,18 @@ func _physics_process(delta: float) -> void:
 
 	life -= delta
 	if life <= 0.0:
+		if kind == "fire":
+			_explode()
+			return
 		queue_free()
+
+
+## Огненный шар взрывается: урон всем врагам рядом.
+func _explode() -> void:
+	if _exploded:
+		return
+	_exploded = true
+	var hits: int = main.explode(shooter, team, global_position, 1.6, damage, tint)
+	if hits > 0 and is_instance_valid(shooter):
+		shooter.add_charge(0.1 * hits)
+	queue_free()

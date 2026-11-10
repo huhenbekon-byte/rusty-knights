@@ -28,6 +28,7 @@ var _popups: Control
 var _tick := 0.0
 var _timer_labels: Array = []      # [[Label, Callable -> String]]
 var _preview_pivot: Node3D
+var _preview_skin := ""       # облик, который примеряют на витрине
 
 
 func _ready() -> void:
@@ -255,7 +256,7 @@ func _refresh_top() -> void:
 	_gems_lbl.text = str(Profile.amount("gems"))
 	_troph_lbl.text = str(int(Profile.data.trophies))
 	_name_lbl.text = str(Profile.data.name)
-	_profile_helm.tint = Profile.skin_colors()[0]
+	_profile_helm.tint = Profile.skin_tint("knight")
 	_profile_helm.queue_redraw()
 	if _badges.size() == TABS.size():
 		_badges["quests"].visible = Profile.quests_ready_count() > 0
@@ -477,41 +478,35 @@ func _page_heroes(col: Control) -> void:
 	_preview_pivot.add_child(pedestal)
 	var hid := str(Profile.data.get("hero", "knight"))
 	var h: Dictionary = Profile.HEROES[hid]
+	var shown_skin := _preview_skin if _preview_skin != "" and Profile.SKINS[hid].has(_preview_skin) else Profile.skin_of(hid)
 	var k = KnightScript.new()
 	k.main = main
 	k.team = 0
 	k.hero = hid
+	k.skin_id = shown_skin
 	k.is_player = true
 	k.display_only = true
 	k.facing = Vector3(0, 0, 1)
 	_preview_pivot.add_child(k)
 	_lbl(show, str(h.name).to_upper(), 40, Color.WHITE, Rect2(0, 330, show.size.x, 50))
-	var sub_text := "Облик: " + str(Profile.SKINS[Profile.data.skin].name) if hid == "knight" else str(h.role)
-	_lbl(show, sub_text, 22, GOLD, Rect2(0, 372, show.size.x, 34))
+	var sk: Dictionary = Profile.skin_def(hid, shown_skin)
+	_lbl(show, "Облик: %s · %s" % [sk.name, Profile.bonus_text(hid, shown_skin)], 22, GOLD, Rect2(0, 372, show.size.x, 34))
 
 	# выбор героя
 	var row := _card(vb, 150, NAVY, INK, 5)
-	var list := [["knight", "Рыцарь", true], ["archer", "Лучница", true], ["hammer", "Молотобоец", true], ["", "Маг", false]]
-	for i in list.size():
-		var id: String = list[i][0]
-		var open: bool = list[i][2]
+	var icons := {"knight": "helm", "archer": "bow", "hammer": "hammer", "mage": "star"}
+	for i in Profile.HERO_ORDER.size():
+		var id: String = Profile.HERO_ORDER[i]
 		var sel: bool = id == hid
 		var x := 14 + i * 166
-		var hp := _panel(row, Rect2(x, 14, 154, 122), NAVY2 if open else Color(0.1, 0.1, 0.18), GOLD if sel else INK, 5 if sel else 4)
-		var kind := "lock"
-		if id == "knight":
-			kind = "helm"
-		elif id == "archer":
-			kind = "bow"
-		elif id == "hammer":
-			kind = "hammer"
-		_icon(hp, kind, Rect2(47, 6, 60, 60), Profile.skin_colors()[0] if id == "knight" else Color.WHITE)
-		_lbl(hp, list[i][1], 19 if str(list[i][1]).length() > 8 else 20, Color.WHITE if open else Color(0.6, 0.6, 0.75), Rect2(0, 66, 154, 28))
-		if not open:
-			_lbl(hp, "скоро", 18, GOLD, Rect2(0, 92, 154, 24))
-		elif sel:
+		var hp := _panel(row, Rect2(x, 14, 154, 122), NAVY2, GOLD if sel else INK, 5 if sel else 4)
+		var tint := Profile.skin_tint(id) if id == "knight" or id == "mage" else Color.WHITE
+		_icon(hp, icons[id], Rect2(47, 6, 60, 60), tint)
+		var nm := str(Profile.HEROES[id].name)
+		_lbl(hp, nm, 19 if nm.length() > 8 else 20, Color.WHITE, Rect2(0, 66, 154, 28))
+		if sel:
 			_lbl(hp, "выбран", 18, Color(0.6, 1, 0.6), Rect2(0, 92, 154, 24))
-		if open and not sel:
+		else:
 			var pick := Button.new()
 			pick.flat = true
 			pick.focus_mode = Control.FOCUS_NONE
@@ -522,6 +517,7 @@ func _page_heroes(col: Control) -> void:
 				main.sfx("click")
 				Profile.data.hero = id
 				Profile.save()
+				_preview_skin = ""
 				show_page("heroes"))
 
 	# характеристики
@@ -532,46 +528,67 @@ func _page_heroes(col: Control) -> void:
 		_bar(stats, Rect2(240, 26 + i * 46, 400, 26), float(rows[i][1]), GOLD)
 	_lbl(stats, "Супер: " + str(h.super), 22, Color(1, 0.85, 0.45), Rect2(0, 150, stats.size.x, 32))
 
-	# облики (пока только у рыцаря)
+	# облики героя
 	var head := Control.new()
-	head.custom_minimum_size = Vector2(700, 70)
+	head.custom_minimum_size = Vector2(700, 96)
 	vb.add_child(head)
-	if hid != "knight":
-		_lbl(head, "Облики для этого героя — скоро", 30, Color(0.75, 0.75, 0.95), Rect2(0, 10, 700, 56))
-		return
-	_lbl(head, "Облики доспехов", 34, Color(1, 0.95, 0.8), Rect2(0, 10, 700, 56))
+	_lbl(head, "Облики", 34, Color(1, 0.95, 0.8), Rect2(0, 6, 700, 50))
+	_lbl(head, "Нажми на облик, чтобы примерить. Бонус действует в бою.", 20, Color(0.75, 0.75, 0.95), Rect2(0, 54, 700, 34))
+	var order: Array = Profile.SKIN_ORDER[hid]
 	for pair in [[0, 1], [2, 3]]:
 		var line := Control.new()
-		line.custom_minimum_size = Vector2(700, 250)
+		line.custom_minimum_size = Vector2(700, 290)
 		vb.add_child(line)
 		for j in 2:
-			_skin_card(line, Profile.SKIN_ORDER[pair[j]], Vector2(10 + j * 345, 0))
+			_skin_card(line, hid, order[pair[j]], Vector2(10 + j * 345, 0), order[pair[j]] == shown_skin)
 	var pad := Control.new()
 	pad.custom_minimum_size = Vector2(700, 20)
 	vb.add_child(pad)
 
 
-func _skin_card(parent: Control, id: String, pos: Vector2) -> void:
-	var s: Dictionary = Profile.SKINS[id]
-	var worn: bool = Profile.data.skin == id
-	var owned := Profile.owns_skin(id)
-	var c := _panel(parent, Rect2(pos, Vector2(335, 240)), NAVY, GOLD if worn else INK, 6 if worn else 5)
-	_icon(c, "helm", Rect2(117, 14, 100, 100), s.steel)
-	_lbl(c, s.name, 24, Color.WHITE, Rect2(0, 118, 335, 40))
+func _skin_card(parent: Control, hero: String, id: String, pos: Vector2, previewed: bool) -> void:
+	var s: Dictionary = Profile.skin_def(hero, id)
+	var worn: bool = Profile.skin_of(hero) == id
+	var owned := Profile.owns_skin(hero, id)
+	var c := _panel(parent, Rect2(pos, Vector2(335, 280)), NAVY2 if previewed else NAVY, GOLD if worn else (Color(0.6, 0.85, 1.0) if previewed else INK), 6 if worn or previewed else 5)
+	# полоски цветов облика
+	var cols: Array = (s.cols as Dictionary).values()
+	for i in cols.size():
+		var sw := Panel.new()
+		sw.add_theme_stylebox_override("panel", _sb(cols[i], INK, 3, 10, 0))
+		sw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		sw.position = Vector2(20, 18 + i * 34)
+		sw.size = Vector2(46, 28)
+		c.add_child(sw)
+	var icons := {"knight": "helm", "archer": "bow", "hammer": "helm", "mage": "star"}
+	_icon(c, icons[hero], Rect2(120, 12, 96, 96), Profile.skin_tint(hero, id))
+	_lbl(c, s.name, 24, Color.WHITE, Rect2(0, 112, 335, 36))
+	_lbl(c, Profile.bonus_text(hero, id), 19, Color(0.6, 1, 0.6) if not (s.bonus as Dictionary).is_empty() else Color(0.7, 0.7, 0.85), Rect2(0, 146, 335, 30))
+	var tap := Button.new()
+	tap.flat = true
+	tap.focus_mode = Control.FOCUS_NONE
+	tap.size = Vector2(335, 180)
+	c.add_child(tap)
+	tap.pressed.connect(func():
+		main.sfx("click")
+		_preview_skin = id
+		show_page("heroes"))
 	var b: Button
 	if worn:
-		b = _btn(c, "НАДЕТ", Color(0.35, 0.35, 0.45), Rect2(40, 164, 255, 62), 28)
+		b = _btn(c, "НАДЕТ", Color(0.35, 0.35, 0.45), Rect2(40, 196, 255, 62), 28)
 		b.disabled = true
 	elif owned:
-		b = _btn(c, "НАДЕТЬ", Color(0.3, 0.6, 0.9), Rect2(40, 164, 255, 62), 28)
+		b = _btn(c, "НАДЕТЬ", Color(0.3, 0.6, 0.9), Rect2(40, 196, 255, 62), 28)
 		b.pressed.connect(func():
-			Profile.wear_skin(id)
+			Profile.wear_skin(hero, id)
+			_preview_skin = ""
 			show_page("heroes"))
 	else:
-		b = _price_btn(c, s.cur, int(s.price), Rect2(40, 164, 255, 62))
+		b = _price_btn(c, s.cur, int(s.price), Rect2(40, 196, 255, 62))
 		b.pressed.connect(func():
-			if Profile.buy_skin(id):
+			if Profile.buy_skin(hero, id):
 				main.sfx("score")
+				_preview_skin = ""
 				show_page("heroes")
 			else:
 				_toast("Не хватает " + ("монет" if s.cur == "coins" else "кристаллов")))
@@ -644,7 +661,8 @@ func _buy_chest(kind: String) -> void:
 		_lbl(box, "+%d" % int(r.gems), 40, Color(0.6, 0.9, 1.0), Rect2(236, y, 200, 56), HORIZONTAL_ALIGNMENT_LEFT)
 		y += 64
 	if str(r.skin) != "":
-		_lbl(box, "Новый облик: " + str(Profile.SKINS[r.skin].name) + "!", 26, Color(0.6, 1, 0.6), Rect2(0, y, 560, 50))
+		var hn := str(Profile.HEROES[r.skin_hero].name)
+		_lbl(box, "Новый облик: %s (%s)!" % [Profile.skin_def(r.skin_hero, r.skin).name, hn], 24, Color(0.6, 1, 0.6), Rect2(0, y, 560, 50))
 	var ok := _btn(box, "ЗАБРАТЬ", Color(0.3, 0.7, 0.35), Rect2(150, box.size.y - 100, 260, 76), 34)
 	ok.pressed.connect(func():
 		_close_popup()
@@ -712,8 +730,8 @@ func _page_road(col: Control) -> void:
 			text = "+%d кристаллов" % int(r.gems)
 		elif r.has("skin"):
 			kind = "helm"
-			text = "Облик: " + str(Profile.SKINS[r.skin].name)
-		_icon(card, kind, Rect2(140, 30, 64, 64), Profile.SKINS[r.skin].steel if r.has("skin") else Color.WHITE)
+			text = "Облик: " + str(Profile.skin_def(r.get("hero", "knight"), r.skin).name)
+		_icon(card, kind, Rect2(140, 30, 64, 64), Profile.skin_tint(r.get("hero", "knight"), r.skin) if r.has("skin") else Color.WHITE)
 		_lbl(card, text, 26, Color.WHITE if st != "locked" else Color(0.6, 0.6, 0.75), Rect2(214, 14, 290, 60), HORIZONTAL_ALIGNMENT_LEFT)
 		if r.has("note"):
 			_lbl(card, r.note, 19, GOLD, Rect2(214, 72, 290, 40), HORIZONTAL_ALIGNMENT_LEFT)
@@ -792,12 +810,12 @@ func _open_settings() -> void:
 			_close_popup()
 			show_page("home"))
 		no.pressed.connect(_close_popup))
-	_lbl(box, "Ржавые Рыцари · версия 0.5", 20, Color(0.6, 0.6, 0.8), Rect2(0, 470, 560, 40))
+	_lbl(box, "Ржавые Рыцари · версия 0.6", 20, Color(0.6, 0.6, 0.8), Rect2(0, 470, 560, 40))
 
 
 func _open_profile() -> void:
 	var box := _popup("Профиль", 640)
-	_icon(box, "helm", Rect2(220, 50, 120, 120), Profile.skin_colors()[0])
+	_icon(box, "helm", Rect2(220, 50, 120, 120), Profile.skin_tint("knight"))
 	var name_edit := LineEdit.new()
 	name_edit.text = str(Profile.data.name)
 	name_edit.max_length = 16
@@ -816,7 +834,7 @@ func _open_profile() -> void:
 		["Кубки (рекорд)", "%d (%d)" % [int(Profile.data.trophies), int(Profile.data.best_trophies)]],
 		["Матчей сыграно", str(int(st.matches))],
 		["Побед", str(int(st.wins))],
-		["Кристаллов сдано", str(int(st.crystals))],
+		["Бронзовых монет сдано", str(int(st.crystals))],
 		["Рыцарей одолено", str(int(st.kos))],
 	]
 	for i in rows.size():

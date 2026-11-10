@@ -1,7 +1,7 @@
 extends Node3D
-## Главная сцена: двор замка, команды рыцарей, батарейки-кристаллы, интерфейс.
-## Режим «Зарядка»: собирай кристаллы в центре и неси на свою станцию.
-## Первая команда, набравшая WIN_SCORE, побеждает.
+## Главная сцена: двор замка, команды героев, режимы, интерфейс.
+## «Казна» — собирай бронзовые монеты и неси к своему знамени (до 10),
+## «Схватка» — командный бой (до 10), «Захват знамени» — укради вражеское знамя (до 3).
 
 const KnightScript = preload("res://knight.gd")
 const JoystickScript = preload("res://joystick.gd")
@@ -12,7 +12,6 @@ const IconScript = preload("res://icon.gd")
 
 const HALF_W := 12.0
 const HALF_L := 20.0
-const WIN_SCORE := 10
 const MAX_BATTERIES := 8
 const CAM_OFFSET := Vector3(0, 11.5, 5.5)
 
@@ -46,6 +45,8 @@ var stations := [Vector3(0, 0, HALF_L - 3.0), Vector3(0, 0, -HALF_L + 3.0)]
 var knights: Array = []
 var batteries: Array = []
 var score := [0, 0]
+var win_score := 10
+var flags: Array = []       # «Захват знамени»: [{node, state, carrier, pos, t}] по командам
 var game_over := false
 var player
 
@@ -103,9 +104,12 @@ func _ready() -> void:
 	mode = str(Profile.data.mode)
 	if not Profile.mode_unlocked(mode):
 		mode = "charge"
+	win_score = 3 if mode == "flag" else 10
 	_build_world()
 	_build_arena()
 	_spawn_knights()
+	if mode == "flag":
+		_spawn_flags()
 	_build_ui()
 	_setup_audio()
 	var shots := _shots_dir()
@@ -472,6 +476,15 @@ func can_see(viewer_team: int, k) -> bool:
 
 
 func _spawn_knights() -> void:
+	# составы: у игрока выбранный герой, остальные — случайные разные герои
+	var all := ["knight", "archer", "hammer", "mage"]
+	var ph := str(Profile.data.get("hero", "knight"))
+	var rest := all.duplicate()
+	rest.erase(ph)
+	rest.shuffle()
+	var enemies := all.duplicate()
+	enemies.shuffle()
+	var comps := [[ph, rest[0], rest[1]], [enemies[0], enemies[1], enemies[2]]]
 	for t in 2:
 		var sgn := 1.0 if t == 0 else -1.0
 		var spots := [Vector3(0, 0, 14.5 * sgn), Vector3(-3, 0, 15.5 * sgn), Vector3(3, 0, 15.5 * sgn)]
@@ -480,11 +493,8 @@ func _spawn_knights() -> void:
 			k.main = self
 			k.team = t
 			k.is_player = (t == 0 and i == 0)
-			# составы: у игрока выбранный герой, у остальных — рыцари и лучницы вперемешку
-			var ph := str(Profile.data.get("hero", "knight"))
-			var ally := "hammer" if ph != "hammer" else "knight"
-			var comp := [[ph, ally, "archer"], ["hammer", "archer", "knight"]]
-			k.hero = comp[t][i]
+			k.hero = comps[t][i]
+			k.role = "defend" if i == 2 else "attack"
 			k.spawn_pos = spots[i]
 			k.position = spots[i]
 			k.facing = Vector3(0, 0, -sgn)
@@ -494,21 +504,28 @@ func _spawn_knights() -> void:
 				player = k
 
 
+## Бронзовая монета («Казна»): стоит на ребре и крутится.
 func _spawn_battery(p: Vector3) -> void:
 	var n := Node3D.new()
-	var gem := MeshInstance3D.new()
-	var pm := PrismMesh.new()                       # кристалл из двух пирамид
-	pm.size = Vector3(0.32, 0.32, 0.32)
-	gem.mesh = pm
-	gem.material_override = toon(Color(0.35, 1.0, 0.6), true, true)
-	gem.position.y = 0.16
-	n.add_child(gem)
-	var gem2 := MeshInstance3D.new()
-	gem2.mesh = pm
-	gem2.material_override = gem.material_override
-	gem2.rotation.z = PI
-	gem2.position.y = -0.16
-	n.add_child(gem2)
+	var coin := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.26
+	cm.bottom_radius = 0.26
+	cm.height = 0.07
+	cm.radial_segments = 20
+	coin.mesh = cm
+	coin.rotation.x = PI / 2
+	coin.material_override = toon(Color(0.85, 0.52, 0.25), true, true)
+	n.add_child(coin)
+	var face := MeshInstance3D.new()
+	var fm := CylinderMesh.new()
+	fm.top_radius = 0.17
+	fm.bottom_radius = 0.17
+	fm.height = 0.08
+	face.mesh = fm
+	face.rotation.x = PI / 2
+	face.material_override = toon(Color(1.0, 0.68, 0.38), true, false)
+	n.add_child(face)
 	n.position = Vector3(p.x, 0.55, p.z)
 	add_child(n)
 	batteries.append(n)
@@ -552,7 +569,7 @@ func _build_ui() -> void:
 
 	_score_bar = ScoreBarScript.new()
 	_score_bar.colors = team_colors
-	_score_bar.goal = WIN_SCORE
+	_score_bar.goal = win_score
 	_anchor(_score_bar, 0, 0, 1, 0, 20, 30, -20, 120)
 	root.add_child(_score_bar)
 
@@ -605,12 +622,21 @@ func _update_ui() -> void:
 	if game_over:
 		_info.text = ""
 	elif not player.alive:
-		_info.text = "Рыцарь встаёт... %d" % int(ceil(player.respawn_left()))
+		_info.text = "Возрождение... %d" % int(ceil(player.respawn_left()))
 	elif player.carried > 0:
-		_info.text = "Кристаллов с собой: %d. Неси к синему знамени!" % player.carried
+		_info.text = "Бронзовых монет с собой: %d. Неси к синему знамени!" % player.carried
+	elif player.has_flag:
+		_info.text = "Знамя у тебя! Неси к своему знамени!"
+	elif mode == "flag" and flag_thief(player.team) != null:
+		_info.text = "Наше знамя украли! Догони вора!"
 	elif _hint_t > 0.0:
-		_info.text = ("Собирай кристаллы в центре. В кустах тебя не видно!" if mode == "charge"
-			else "Схватка! Одолей 10 вражеских рыцарей.")
+		match mode:
+			"brawl":
+				_info.text = "Схватка! Одолей 10 вражеских героев."
+			"flag":
+				_info.text = "Укради красное знамя и принеси к своему. До 3 очков!"
+			_:
+				_info.text = "Собирай бронзовые монеты в центре. В кустах тебя не видно!"
 	else:
 		_info.text = ""
 	_super_btn.fill = player.super_charge
@@ -666,6 +692,8 @@ func _process(delta: float) -> void:
 
 	_handle_player_combat()
 	_handle_pickups()
+	if mode == "flag":
+		_update_flags(delta)
 
 
 func _handle_player_combat() -> void:
@@ -702,10 +730,10 @@ func _handle_pickups() -> void:
 				batteries.remove_at(i)
 				b.queue_free()
 				sfx("pickup", kp, 0.0 if k.is_player else -5.0)
-				fx_burst(b.position, Color(0.4, 1.0, 0.6), 10, 2.5, 0.06, 0.5, 2.0)
+				fx_burst(b.position, Color(1.0, 0.7, 0.35), 10, 2.5, 0.06, 0.5, 2.0)
 		var st: Vector3 = stations[k.team]
 		if k.carried > 0 and Vector2(st.x - kp.x, st.z - kp.z).length() < 1.8:
-			fx_text(st + Vector3(0, 2.8, 0), "+%d" % k.carried, Color(0.45, 1, 0.65), 90)
+			fx_text(st + Vector3(0, 2.8, 0), "+%d" % k.carried, Color(1.0, 0.72, 0.4), 90)
 			if k.is_player:
 				note("crystals", k.carried)
 			score[k.team] += k.carried
@@ -713,7 +741,7 @@ func _handle_pickups() -> void:
 			sfx("score", null, 0.0 if k.team == player.team else -6.0)
 			fx_ring(st, team_colors[k.team], 3.0, 0.6)
 			fx_burst(st + Vector3(0, 0.3, 0), (team_colors[k.team] as Color).lightened(0.4), 24, 5.0, 0.08, 0.8, -6.0)
-			if score[k.team] >= WIN_SCORE:
+			if score[k.team] >= win_score:
 				_end_game(k.team)
 				return
 
@@ -849,6 +877,224 @@ func nearest_battery(pos: Vector3):
 	return best
 
 
+# ---------------------------------------------------------------- «Захват знамени»
+
+func _make_flag(t: int) -> Node3D:
+	var n := Node3D.new()
+	var col: Color = team_colors[t]
+	var pole := MeshInstance3D.new()
+	var pm := CylinderMesh.new()
+	pm.top_radius = 0.04
+	pm.bottom_radius = 0.05
+	pm.height = 2.6
+	pole.mesh = pm
+	pole.position.y = 1.3
+	pole.material_override = toon(Color(0.42, 0.28, 0.16), false, true)
+	n.add_child(pole)
+	var cloth := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.05, 0.75, 0.9)
+	cloth.mesh = bm
+	cloth.position = Vector3(0, 2.15, 0.47)
+	cloth.material_override = toon(col, true, true)
+	n.add_child(cloth)
+	var tip := PrismMesh.new()
+	tip.size = Vector3(0.9, 0.3, 0.05)
+	var tail := MeshInstance3D.new()
+	tail.mesh = tip
+	tail.position = Vector3(0, 1.64, 0.47)
+	tail.rotation = Vector3(0, PI / 2, PI)
+	tail.material_override = cloth.material_override
+	n.add_child(tail)
+	var cross_v := MeshInstance3D.new()
+	var cv := BoxMesh.new()
+	cv.size = Vector3(0.06, 0.45, 0.1)
+	cross_v.mesh = cv
+	cross_v.position = Vector3(0, 2.15, 0.47)
+	cross_v.material_override = toon(Color(1.0, 0.85, 0.4), false, false)
+	n.add_child(cross_v)
+	var cross_h := MeshInstance3D.new()
+	var ch := BoxMesh.new()
+	ch.size = Vector3(0.06, 0.1, 0.4)
+	cross_h.mesh = ch
+	cross_h.position = Vector3(0, 2.25, 0.47)
+	cross_h.material_override = cross_v.material_override
+	n.add_child(cross_h)
+	var knob := MeshInstance3D.new()
+	var km := SphereMesh.new()
+	km.radius = 0.09
+	km.height = 0.18
+	knob.mesh = km
+	knob.position.y = 2.65
+	knob.material_override = toon(Color(1.0, 0.8, 0.3), true, true)
+	n.add_child(knob)
+	add_child(n)
+	return n
+
+
+func _spawn_flags() -> void:
+	for t in 2:
+		var home: Vector3 = stations[t]
+		var n := _make_flag(t)
+		n.position = home
+		flags.append({"node": n, "state": "home", "carrier": null, "pos": home, "t": 0.0})
+
+
+func _flag_home(t: int) -> void:
+	var f: Dictionary = flags[t]
+	if f.carrier != null and is_instance_valid(f.carrier):
+		f.carrier.has_flag = false
+	f.state = "home"
+	f.carrier = null
+	f.pos = stations[t]
+	f.node.position = stations[t]
+	f.node.scale = Vector3.ONE
+	fx_ring(stations[t], team_colors[t], 2.2, 0.5)
+
+
+func _drop_flag(k) -> void:
+	for t in flags.size():
+		var f: Dictionary = flags[t]
+		if f.carrier == k:
+			k.has_flag = false
+			f.state = "dropped"
+			f.carrier = null
+			f.pos = Vector3(k.global_position.x, 0, k.global_position.z)
+			f.node.position = f.pos
+			f.node.scale = Vector3.ONE
+			f.t = 8.0
+			fx_text(f.pos + Vector3(0, 3.0, 0), "Знамя упало!", team_colors[t], 60)
+
+
+func _update_flags(delta: float) -> void:
+	for t in flags.size():
+		var f: Dictionary = flags[t]
+		match f.state:
+			"carried":
+				var c = f.carrier
+				f.pos = c.global_position
+				f.node.position = c.global_position + Vector3(0, 0.1, 0) - (c.facing as Vector3) * 0.3
+				f.node.scale = Vector3(0.75, 0.75, 0.75)
+				# донёс до своего знамени, и своё знамя дома — очко
+				var own: Dictionary = flags[c.team]
+				var st: Vector3 = stations[c.team]
+				if own.state == "home" and Vector2(st.x - f.pos.x, st.z - f.pos.z).length() < 1.8:
+					score[c.team] += 1
+					fx_text(st + Vector3(0, 3.0, 0), "ЗНАМЯ ЗАХВАЧЕНО!", team_colors[c.team], 80)
+					fx_burst(st + Vector3(0, 0.5, 0), (team_colors[c.team] as Color).lightened(0.4), 30, 6.0, 0.09, 0.9, -6.0)
+					sfx("score")
+					shake(0.4, st)
+					_flag_home(t)
+					if score[c.team] >= win_score:
+						_end_game(c.team)
+						return
+				continue
+			"dropped":
+				f.t -= delta
+				if f.t <= 0.0:
+					_flag_home(t)
+					continue
+			_:
+				f.node.rotation.y = sin(Time.get_ticks_msec() * 0.0015) * 0.3
+		for k in knights:
+			if not k.alive:
+				continue
+			var kp: Vector3 = k.global_position
+			if Vector2(kp.x - f.pos.x, kp.z - f.pos.z).length() > 1.1:
+				continue
+			if k.team != t and not k.has_flag:
+				f.state = "carried"
+				f.carrier = k
+				k.has_flag = true
+				sfx("pickup", kp)
+				fx_text(kp + Vector3(0, 3.0, 0), "Знамя украдено!", team_colors[k.team], 64)
+				break
+			elif k.team == t and f.state == "dropped":
+				sfx("respawn", kp)
+				_flag_home(t)
+				break
+
+
+## Кто несёт знамя команды team (или null).
+func flag_thief(t: int):
+	if flags.size() < 2:
+		return null
+	var f: Dictionary = flags[t]
+	return f.carrier if f.state == "carried" else null
+
+
+## Куда идти атакующему: к вражескому знамени, а если его уже несёт свой — к своей базе.
+func flag_target(t: int) -> Vector3:
+	var e: Dictionary = flags[1 - t]
+	if e.state == "carried":
+		return stations[t]
+	return e.pos
+
+
+# ---------------------------------------------------------------- огонь мага
+
+## Взрыв огненного шара: урон врагам в радиусе. Возвращает число задетых.
+func explode(attacker, t: int, pos: Vector3, radius: float, dmg: float, color: Color) -> int:
+	var hits := 0
+	for k in knights:
+		if k.alive and k.team != t and Vector2(k.global_position.x - pos.x, k.global_position.z - pos.z).length() < radius:
+			k.take_damage(dmg, attacker if is_instance_valid(attacker) else null)
+			hits += 1
+	sfx("slam", pos, -9.0)
+	fx_ring(Vector3(pos.x, 0, pos.z), color, radius, 0.35)
+	fx_burst(pos, color.lightened(0.3), 16, 4.0, 0.1, 0.45, 1.0)
+	fx_burst(pos, Color(0.3, 0.25, 0.25, 0.8), 8, 2.0, 0.16, 0.6, 1.5)
+	return hits
+
+
+## «Метеор» мага: метка на земле, через 0.7 с падает огненный шар и взрывается.
+func meteor(attacker, pos: Vector3, radius: float, dmg: float, color: Color) -> void:
+	pos.x = clampf(pos.x, -HALF_W + 0.5, HALF_W - 0.5)
+	pos.z = clampf(pos.z, -HALF_L + 0.5, HALF_L - 0.5)
+	pos.y = 0.0
+	var t: int = attacker.team
+	var mark := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = radius - 0.15
+	tm.outer_radius = radius
+	tm.rings = 40
+	mark.mesh = tm
+	mark.scale.y = 0.1
+	mark.position = pos + Vector3(0, 0.06, 0)
+	var mm := StandardMaterial3D.new()
+	mm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mm.albedo_color = Color(color.r, color.g, color.b, 0.7)
+	mark.material_override = mm
+	add_child(mark)
+	var rock := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.45
+	sm.height = 0.9
+	rock.mesh = sm
+	rock.material_override = toon(color, true, true)
+	rock.position = pos + Vector3(2.5, 10.0, -2.5)
+	add_child(rock)
+	var tw := create_tween()
+	tw.tween_property(rock, "position", pos + Vector3(0, 0.4, 0), 0.7).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.tween_callback(func():
+		mark.queue_free()
+		rock.queue_free()
+		if game_over:
+			return
+		var hits := 0
+		for k in knights:
+			if k.alive and k.team != t and Vector2(k.global_position.x - pos.x, k.global_position.z - pos.z).length() < radius:
+				k.take_damage(dmg, attacker if is_instance_valid(attacker) else null)
+				hits += 1
+		sfx("slam", pos)
+		fx_ring(pos, color, radius, 0.45)
+		fx_ring(pos, Color(1, 0.9, 0.6), radius * 0.6, 0.6)
+		fx_burst(pos + Vector3(0, 0.3, 0), color.lightened(0.3), 30, 7.0, 0.12, 0.8, -6.0)
+		fx_burst(pos + Vector3(0, 0.2, 0), Color(0.35, 0.3, 0.3, 0.8), 14, 3.0, 0.2, 0.8, 1.0)
+		shake(0.7, pos))
+
+
 ## «Удар по земле» Молотобойца: урон всем врагам в радиусе, волна, камни, тряска.
 func ground_slam(attacker, pos: Vector3, radius: float, dmg: float) -> void:
 	for k in knights:
@@ -863,13 +1109,15 @@ func ground_slam(attacker, pos: Vector3, radius: float, dmg: float) -> void:
 
 
 func on_knight_died(k, killer = null) -> void:
+	if k.has_flag:
+		_drop_flag(k)
 	if killer != null and is_instance_valid(killer) and killer == player:
 		note("kos")
 	if mode == "brawl" and not game_over:
 		var t := 1 - int(k.team)
 		score[t] += 1
 		fx_text(stations[t] + Vector3(0, 2.8, 0), "+1", team_colors[t], 80)
-		if score[t] >= WIN_SCORE:
+		if score[t] >= win_score:
 			_end_game(t)
 	var count: int = k.carried
 	k.carried = 0
