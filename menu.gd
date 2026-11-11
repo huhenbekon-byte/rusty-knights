@@ -918,7 +918,7 @@ func _toggle_btn(box: Control, text: String, key: String, y: float) -> void:
 
 
 func _open_settings() -> void:
-	var box := _popup("Настройки", 640)
+	var box := _popup("Настройки", 730)
 	_toggle_btn(box, "Звук", "sound", 70)
 	_toggle_btn(box, "Музыка", "music", 160)
 	_toggle_btn(box, "Тряска камеры", "shake", 250)
@@ -927,7 +927,9 @@ func _open_settings() -> void:
 		Profile.data.tutorial_done = false
 		_close_popup()
 		main.start_match())
-	var r := _btn(box, "Сбросить прогресс", Color(0.75, 0.25, 0.22), Rect2(80, 450, 400, 72), 28)
+	var acc := _btn(box, "Аккаунт и сохранение", Color(0.95, 0.6, 0.15), Rect2(80, 450, 400, 72), 28)
+	acc.pressed.connect(_open_account)
+	var r := _btn(box, "Сбросить прогресс", Color(0.75, 0.25, 0.22), Rect2(80, 550, 400, 72), 28)
 	r.pressed.connect(func():
 		var c := _popup("Точно сбросить?", 380)
 		_lbl(c, "Монеты, кубки, облики и задания\nпропадут навсегда.", 24, Color(0.9, 0.9, 1.0), Rect2(0, 60, 560, 110))
@@ -939,11 +941,114 @@ func _open_settings() -> void:
 			_close_popup()
 			show_page("home"))
 		no.pressed.connect(_close_popup))
-	_lbl(box, "Ржавые Рыцари · версия 0.8", 20, Color(0.6, 0.6, 0.8), Rect2(0, 550, 560, 40))
+	_lbl(box, "Ржавые Рыцари · версия 0.8", 20, Color(0.6, 0.6, 0.8), Rect2(0, 640, 560, 40))
+
+
+func _field(box: Control, hint: String, y: float, secret := false) -> LineEdit:
+	var e := LineEdit.new()
+	e.placeholder_text = hint
+	e.secret = secret
+	e.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	e.add_theme_font_size_override("font_size", 28)
+	e.add_theme_color_override("font_placeholder_color", Color(0.55, 0.55, 0.7))
+	e.add_theme_stylebox_override("normal", _sb(Color(0.05, 0.05, 0.12), GOLD, 3, 14, 0))
+	e.add_theme_stylebox_override("focus", _sb(Color(0.08, 0.08, 0.18), Color.WHITE, 3, 14, 0))
+	e.position = Vector2(60, y)
+	e.size = Vector2(440, 64)
+	box.add_child(e)
+	return e
+
+
+## Окно аккаунта: вход, регистрация, сброс пароля; после входа — почта, синхронизация, выход.
+func _open_account() -> void:
+	if not Cloud.configured():
+		var b := _popup("Аккаунт", 380)
+		_lbl(b, "Облако ещё не подключено.\nНужны ключи Firebase в файле cloud.gd.", 24, Color(0.9, 0.9, 1.0), Rect2(0, 70, 560, 120))
+		_lbl(b, "Пока прогресс хранится только на этом телефоне.", 20, Color(0.65, 0.65, 0.85), Rect2(0, 200, 560, 40))
+		return
+	if Cloud.logged_in():
+		var b := _popup("Аккаунт", 520)
+		_icon(b, "check", Rect2(240, 56, 80, 80), Color(0.5, 1, 0.55))
+		_lbl(b, "Ты вошёл как", 22, Color(0.7, 0.7, 0.9), Rect2(0, 146, 560, 34))
+		_lbl(b, Cloud.email, 28, GOLD, Rect2(0, 180, 560, 44))
+		var st := _lbl(b, "", 22, Color(0.75, 0.9, 0.75), Rect2(0, 230, 560, 40))
+		var upd := func():
+			if not is_instance_valid(st):
+				return
+			match Cloud.status:
+				"sync":
+					st.text = "Сохраняем в облако..."
+				"error":
+					st.text = Cloud.last_error
+				_:
+					st.text = "Прогресс сохранён в облаке"
+		upd.call()
+		Cloud.status_changed.connect(upd)
+		st.tree_exiting.connect(func(): Cloud.status_changed.disconnect(upd))
+		var now := _btn(b, "Сохранить сейчас", Color(0.3, 0.6, 0.38), Rect2(80, 300, 400, 72), 28)
+		now.pressed.connect(func(): Cloud.upload())
+		var out := _btn(b, "Выйти", Color(0.6, 0.3, 0.3), Rect2(80, 395, 400, 72), 28)
+		out.pressed.connect(func():
+			Cloud.sign_out()
+			_toast("Ты вышел. Прогресс остался на телефоне.", Color(0.8, 0.85, 1.0))
+			_open_account())
+		return
+	var box := _popup("Аккаунт", 660)
+	_lbl(box, "Войди, чтобы прогресс хранился в облаке\nи переносился на другой телефон.", 22, Color(0.85, 0.85, 1.0), Rect2(0, 56, 560, 70))
+	var mail := _field(box, "почта", 140)
+	var pwd := _field(box, "пароль (от 6 символов)", 220, true)
+	var msg := _lbl(box, "", 22, Color(1, 0.6, 0.5), Rect2(20, 292, 520, 64))
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var login := _btn(box, "ВОЙТИ", Color(0.3, 0.7, 0.35), Rect2(60, 366, 210, 76), 30)
+	var reg := _btn(box, "РЕГИСТРАЦИЯ", Color(0.95, 0.6, 0.15), Rect2(290, 366, 210, 76), 24)
+	var forgot := _btn(box, "Забыл пароль", Color(0.35, 0.35, 0.5), Rect2(130, 470, 300, 60), 22)
+	_lbl(box, "Пароль хранится в Firebase в зашифрованном виде.", 18, Color(0.6, 0.6, 0.8), Rect2(0, 560, 560, 30))
+	var busy := [false]
+	var run := func(kind: String):
+		if busy[0]:
+			return
+		var m := mail.text.strip_edges()
+		if m == "" or not "@" in m:
+			msg.text = "Введи почту."
+			return
+		if kind != "reset" and pwd.text.length() < 6:
+			msg.text = "Пароль — минимум 6 символов."
+			return
+		busy[0] = true
+		msg.add_theme_color_override("font_color", Color(0.8, 0.85, 1.0))
+		msg.text = "Подожди..."
+		var err := ""
+		match kind:
+			"in":
+				err = await Cloud.sign_in(m, pwd.text)
+			"up":
+				err = await Cloud.sign_up(m, pwd.text)
+			"reset":
+				err = await Cloud.reset_password(m)
+		busy[0] = false
+		if not is_instance_valid(msg):
+			return
+		if err != "":
+			msg.add_theme_color_override("font_color", Color(1, 0.6, 0.5))
+			msg.text = err
+			return
+		if kind == "reset":
+			msg.add_theme_color_override("font_color", Color(0.6, 1, 0.6))
+			msg.text = "Письмо для сброса пароля отправлено."
+			return
+		main.sfx("reward")
+		_toast("Готово! Прогресс сохраняется в облаке.", Color(0.6, 1, 0.6))
+		_close_popup()
+		show_page(page)
+	login.pressed.connect(func(): run.call("in"))
+	reg.pressed.connect(func(): run.call("up"))
+	forgot.pressed.connect(func(): run.call("reset"))
 
 
 func _open_profile() -> void:
-	var box := _popup("Профиль", 640)
+	var box := _popup("Профиль", 730)
+	var acc := _btn(box, "Аккаунт: " + (Cloud.email if Cloud.logged_in() else "войти"), Color(0.95, 0.6, 0.15), Rect2(60, 600, 440, 72), 24)
+	acc.pressed.connect(_open_account)
 	_icon(box, "helm", Rect2(220, 50, 120, 120), Profile.skin_tint("knight"))
 	var name_edit := LineEdit.new()
 	name_edit.text = str(Profile.data.name)

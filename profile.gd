@@ -136,23 +136,41 @@ func load_data() -> void:
 		var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
 		var parsed = JSON.parse_string(f.get_as_text())
 		if parsed is Dictionary:
-			for k in parsed:
-				if parsed[k] is Dictionary and data.get(k) is Dictionary:
-					for kk in parsed[k]:
-						data[k][kk] = parsed[k][kk]
-				elif k == "skins" and parsed[k] is Array:          # старый формат: только рыцарь
-					data.skins["knight"] = parsed[k]
-				elif k == "skin" and parsed[k] is String:
-					data.skin["knight"] = parsed[k]
-				else:
-					data[k] = parsed[k]
-			# старые игроки, у которых уже есть кубки, обучение не проходят
-			if not parsed.has("tutorial_done") and int(data.trophies) > 0:
-				data.tutorial_done = true
+			apply_dict(parsed, false)
 	ensure_quests()
 
 
-func save() -> void:
+## Взять прогресс из словаря (файл на телефоне или облако) поверх значений по умолчанию.
+func apply_dict(parsed: Dictionary, reset := true) -> void:
+	if reset:
+		data = _defaults()
+	for k in parsed:
+		if parsed[k] is Dictionary and data.get(k) is Dictionary:
+			for kk in parsed[k]:
+				data[k][kk] = parsed[k][kk]
+		elif k == "skins" and parsed[k] is Array:          # старый формат: только рыцарь
+			data.skins["knight"] = parsed[k]
+		elif k == "skin" and parsed[k] is String:
+			data.skin["knight"] = parsed[k]
+		else:
+			data[k] = parsed[k]
+	# старые игроки, у которых уже есть кубки, обучение не проходят
+	if not parsed.has("tutorial_done") and int(data.trophies) > 0:
+		data.tutorial_done = true
+	# облако хранит числа дробными — облики приводим к массивам строк
+	for h in data.skins:
+		var arr := []
+		for id in data.skins[h]:
+			arr.append(str(id))
+		data.skins[h] = arr
+	if reset:
+		ensure_quests()
+
+
+## stamp — отметить время сохранения (по нему облако решает, какая версия новее).
+func save(stamp := true) -> void:
+	if stamp:
+		data.saved_at = Time.get_unix_time_from_system()
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(data))

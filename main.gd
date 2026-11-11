@@ -286,6 +286,18 @@ func _arg(prefix: String) -> String:
 ## Кадр 1 — главное меню, кадры 2–3 — бой (игрок под управлением бота).
 func _setup_screenshots(dir: String) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
+	if "--account" in OS.get_cmdline_user_args():   # окно аккаунта: вход с ошибкой сети
+		_open_menu()
+		await get_tree().create_timer(0.8).timeout
+		_menu._open_account()
+		await get_tree().create_timer(0.6).timeout
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("%s/acc_1.png" % dir)
+		var r: String = await Cloud.sign_in("test@example.com", "123456")
+		print("sign_in result: ", r)
+		await RenderingServer.frame_post_draw
+		get_tree().quit()
+		return
 	var ch := _arg("--chest=")
 	if ch != "":                                    # кадры открытия сундука
 		_open_menu()
